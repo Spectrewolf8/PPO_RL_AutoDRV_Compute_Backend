@@ -15,7 +15,7 @@ class AutoDrivingEnv(gym.Env):
         Total: 11 continuous values
 
     Action Space:
-        - Discrete(2): 0 = turn left (-1), 1 = turn right (1)
+        - Discrete(3): 0 = turn left (-1), 1 = straight (0), 2 = turn right (1)
     """
 
     metadata = {"render_modes": ["human"], "render_fps": 30}
@@ -35,7 +35,7 @@ class AutoDrivingEnv(gym.Env):
             max_ray_distances: List of 5 max distances for each ray [Forward, Fwd-Left, Fwd-Right, Right, Left]
                               If None, defaults to [100.0, 100.0, 100.0, 100.0, 100.0]
             max_speed: Maximum speed in Unity (linear velocity)
-            steering_speed_penalty: Speed reduction when steering
+            steering_speed_penalty: Speed reduction when steering (not used in Python, handled by Unity)
         """
         super().__init__()
 
@@ -51,8 +51,8 @@ class AutoDrivingEnv(gym.Env):
                 raise ValueError("max_ray_distances must contain exactly 5 values")
             self.max_ray_distances = list(max_ray_distances)
 
-        # Define action space: Discrete actions (0 = left, 1 = right)
-        self.action_space = spaces.Discrete(2)
+        # Define action space: Discrete actions (0 = left, 1 = straight, 2 = right)
+        self.action_space = spaces.Discrete(3)
 
         # Define observation space
         # 5 ray distances (each with independent max) + 5 ray hits (0 or 1) + 1 speed (0 to max_speed)
@@ -105,7 +105,7 @@ class AutoDrivingEnv(gym.Env):
         Execute one step in the environment.
 
         Args:
-            action: 0 for left (-1), 1 for right (1)
+            action: 0 for left (-1), 1 for straight (0), 2 for right (1)
 
         Returns:
             observation: New observation after taking action
@@ -115,16 +115,23 @@ class AutoDrivingEnv(gym.Env):
             info: Additional information dictionary
         """
         # Convert discrete action to steering value
-        steering = -1 if action == 0 else 1
+        steering = self.action_to_steering(action)
 
         self._episode_step += 1
 
         # NOTE: In actual integration, this is where you would:
-        # 1. Send the steering action to Unity
-        # 2. Receive the new game state from Unity
-        # For now, this is a placeholder that keeps the current state
+        # 1. Send the steering action to Unity via WebSocket/API
+        # 2. Wait for Unity to process the action and update game physics
+        # 3. Receive the new game state from Unity (via update_state() method)
+        # 4. Unity handles speed calculation based on steering and physics
+        #
+        # For now, this is a placeholder that keeps the current state.
+        # When integrated with Unity:
+        #   - Unity updates carSpeed based on steering_speed_penalty
+        #   - Unity calculates and sends back updated rayDistances, rayHits
+        #   - Unity computes rewards based on game events
 
-        # Get observation from current state
+        # Get observation from current state (updated by Unity via update_state())
         observation = self._get_observation()
 
         # Calculate reward (placeholder - will be updated from Unity)
@@ -145,6 +152,10 @@ class AutoDrivingEnv(gym.Env):
 
         Returns:
             Numpy array with [ray_distances (5), ray_hits (5), speed (1)]
+
+        NOTE: This retrieves the observation from the current internal state,
+        which should be updated by Unity via the update_state() method before
+        calling this function.
         """
         # Ensure ray distances don't exceed their respective maximums
         ray_distances = []
@@ -156,6 +167,8 @@ class AutoDrivingEnv(gym.Env):
         ray_hits = np.array(self._current_state["rayHits"], dtype=np.float32)
 
         # Clamp speed to max_speed
+        # NOTE: Speed value comes from Unity, which handles speed calculation
+        # based on steering actions and physics simulation
         car_speed = min(self._current_state["carSpeed"], self.max_speed)
         car_speed = np.array([car_speed], dtype=np.float32)
 
@@ -230,10 +243,17 @@ class AutoDrivingEnv(gym.Env):
     def update_state(self, game_state: Dict[str, Any]) -> None:
         """
         Update the environment's internal state with data from Unity.
-        This method should be called when receiving new game state from Unity.
+
+        This method should be called after sending an action to Unity and
+        receiving the updated game state. Unity is responsible for:
+        - Updating ray distances and hit indicators based on raycasts
+        - Calculating car speed based on steering and physics
+        - Computing rewards based on game events'
+        - Tracking respawns and elapsed time
 
         Args:
             game_state: Dictionary containing game state from Unity
+                Expected keys: rayDistances, rayHits, carSpeed, rewards, respawns, elapsedTime
         """
         self._current_state.update(game_state)
 
@@ -242,12 +262,19 @@ class AutoDrivingEnv(gym.Env):
         Convert action index to steering value for Unity.
 
         Args:
-            action: Action index (0 or 1)
+            action: Action index (0, 1, or 2)
 
         Returns:
-            Steering value: -1 for left, 1 for right
+            Steering value: -1 for left, 0 for straight, 1 for right
         """
-        return -1 if action == 0 else 1
+        if action == 0:
+            return -1  # Turn left
+        elif action == 1:
+            return 0  # Go straight
+        elif action == 2:
+            return 1  # Turn right
+        else:
+            raise ValueError(f"Invalid action: {action}. Must be 0, 1, or 2.")
 
     def render(self) -> Optional[np.ndarray]:
         """
@@ -295,6 +322,7 @@ if __name__ == "__main__":
     print("Initial observation shape:", observation.shape)
     print("Initial observation:", observation)
     print("Observation space:", env.observation_space)
+    print("Action space:", env.action_space)
     print("Info:", info)
 
     # Simulate some game states
@@ -314,13 +342,35 @@ if __name__ == "__main__":
 
     env.update_state(simulated_state)
 
-    # Test a few steps
-    for i in range(5):
-        action = env.action_space.sample()  # Random action
+    # Test a few steps with all 3 actions
+    print("\nTesting all action types:")
+    for action in [0, 1, 2]:  # Test left, straight, right
         observation, reward, terminated, truncated, info = env.step(action)
 
+        action_names = ["LEFT", "STRAIGHT", "RIGHT"]
+        print(
+            f"\nAction: {action} ({action_names[action]}) - Steering: {env.action_to_steering(action)}"
+        )
+        print(f"  Reward: {reward:.2f}")
+        print(f"  Terminated: {terminated}, Truncated: {truncated}")
+
+        if terminated or truncated:
+            break
+
+    # Test a few random steps
+    print("\n" + "=" * 50)
+    print("Testing with random actions")
+    print("=" * 50)
+
+    for i in range(5):
+        action = env.action_space.sample()  # Random action (0, 1, or 2)
+        observation, reward, terminated, truncated, info = env.step(action)
+
+        action_names = ["LEFT", "STRAIGHT", "RIGHT"]
         print(f"\nStep {i+1}:")
-        print(f"  Action: {action} (Steering: {env.action_to_steering(action)})")
+        print(
+            f"  Action: {action} ({action_names[action]}) - Steering: {env.action_to_steering(action)}"
+        )
         print(f"  Reward: {reward:.2f}")
         print(f"  Terminated: {terminated}, Truncated: {truncated}")
 
