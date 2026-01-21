@@ -16,6 +16,11 @@ class AutoDrivingEnv(gym.Env):
 
     Action Space:
         - Discrete(3): 0 = turn left (-1), 1 = straight (0), 2 = turn right (1)
+
+    Reward Structure:
+        - Python calculates rewards based on Unity signals
+        - Unity sends: rewardCollected (0/1), collisionDetected (0/1)
+        - Server-side reward calculation provides flexibility for tuning
     """
 
     metadata = {"render_modes": ["human"], "render_fps": 30}
@@ -26,6 +31,9 @@ class AutoDrivingEnv(gym.Env):
         max_ray_distances: Optional[List[float]] = None,
         max_speed: float = 2.5,
         steering_speed_penalty: float = 0.5,
+        reward_collected_value: float = 10.0,
+        collision_penalty: float = -10.0,
+        survival_reward: float = 0.1,
     ):
         """
         Initialize the AutoDriving environment.
@@ -36,12 +44,20 @@ class AutoDrivingEnv(gym.Env):
                               If None, defaults to [100.0, 100.0, 100.0, 100.0, 100.0]
             max_speed: Maximum speed in Unity (linear velocity)
             steering_speed_penalty: Speed reduction when steering (not used in Python, handled by Unity)
+            reward_collected_value: Reward value when collecting a reward object
+            collision_penalty: Penalty value when collision is detected
+            survival_reward: Small reward per step for staying alive (encourages survival without biasing steering)
         """
         super().__init__()
 
         self.render_mode = render_mode
         self.max_speed = max_speed
         self.steering_speed_penalty = steering_speed_penalty
+
+        # Reward configuration (server-side calculation)
+        self.reward_collected_value = reward_collected_value
+        self.collision_penalty = collision_penalty
+        self.survival_reward = survival_reward
 
         # Set individual ray max distances
         if max_ray_distances is None:
@@ -88,7 +104,8 @@ class AutoDrivingEnv(gym.Env):
             "rayDistances": self.max_ray_distances.copy(),
             "rayHits": [0] * 5,
             "carSpeed": 0.0,
-            "rewards": 0.0,
+            "rewardCollected": 0,
+            "collisionDetected": 0,
             "respawns": 0,
             "elapsedTime": 0.0,
         }
@@ -129,12 +146,13 @@ class AutoDrivingEnv(gym.Env):
         # When integrated with Unity:
         #   - Unity updates carSpeed based on steering_speed_penalty
         #   - Unity calculates and sends back updated rayDistances, rayHits
-        #   - Unity computes rewards based on game events
+        #   - Unity sends rewardCollected (0/1) and collisionDetected (0/1) signals
+        #   - Python server calculates actual reward values
 
         # Get observation from current state (updated by Unity via update_state())
         observation = self._get_observation()
 
-        # Calculate reward (placeholder - will be updated from Unity)
+        # Calculate reward based on Unity signals
         reward = self._calculate_reward()
 
         # Check termination conditions
@@ -178,32 +196,36 @@ class AutoDrivingEnv(gym.Env):
 
     def _calculate_reward(self) -> float:
         """
-        Calculate reward based on current state.
-        This is a placeholder implementation.
+        Calculate reward based on Unity signals.
+
+        Unity sends:
+            - rewardCollected: 0 or 1 (1 when reward object is collected)
+            - collisionDetected: 0 or 1 (1 when collision occurs)
+
+        Python calculates the actual reward values based on these signals.
+        This allows for flexible reward tuning without modifying Unity code.
+
+        Reward structure:
+            - Survival: Small positive reward per step (encourages staying alive)
+            - Reward collection: Large positive reward
+            - Collision: Large negative penalty
 
         Returns:
             Reward value
         """
-        # In actual implementation, you might want to use the reward from Unity
-        # or calculate it based on state
-
         reward = 0.0
 
-        # Example reward structure (customize as needed):
-        # 1. Reward for maintaining speed
-        speed = self._current_state["carSpeed"]
-        reward += speed * 0.01  # Small positive reward for moving
+        # 1. Survival reward - given every step the car stays alive
+        # This encourages the model to avoid collisions without biasing toward/against steering
+        reward += self.survival_reward
 
-        # 2. Penalty for hitting obstacles
-        ray_hits = self._current_state["rayHits"]
-        if ray_hits[0] == 1:  # Forward ray hit
-            ray_dist = self._current_state["rayDistances"][0]
-            if ray_dist < 2.0:
-                reward -= 1.0  # Penalty for being too close to obstacle
+        # 2. Reward for collecting reward objects (sent from Unity)
+        if self._current_state.get("rewardCollected", 0) == 1:
+            reward += self.reward_collected_value
 
-        # 3. Use reward from Unity if available
-        if "rewards" in self._current_state:
-            reward += self._current_state["rewards"]
+        # 3. Penalty for collisions (sent from Unity)
+        if self._current_state.get("collisionDetected", 0) == 1:
+            reward += self.collision_penalty
 
         return reward
 
@@ -214,13 +236,13 @@ class AutoDrivingEnv(gym.Env):
         Returns:
             True if episode is terminated
         """
-        # Example termination conditions:
-        # 1. If respawns indicate a crash
-        if self._current_state.get("respawns", 0) > 0:
+        # Episode terminates on collision
+        if self._current_state.get("collisionDetected", 0) == 1:
             return True
 
-        # 2. If speed is zero for too long (stuck)
-        # This would require tracking state history
+        # Or if respawns indicate a crash
+        if self._current_state.get("respawns", 0) > 0:
+            return True
 
         return False
 
@@ -236,6 +258,8 @@ class AutoDrivingEnv(gym.Env):
             "car_speed": self._current_state["carSpeed"],
             "elapsed_time": self._current_state.get("elapsedTime", 0.0),
             "respawns": self._current_state.get("respawns", 0),
+            "reward_collected": self._current_state.get("rewardCollected", 0),
+            "collision_detected": self._current_state.get("collisionDetected", 0),
             "max_ray_distances": self.max_ray_distances,
             "max_speed": self.max_speed,
         }
@@ -244,22 +268,34 @@ class AutoDrivingEnv(gym.Env):
         """
         Update the environment's internal state with data from Unity.
 
-        This method should be called after sending an action to Unity and
-        receiving the updated game state. Unity is responsible for:
+        Unity is responsible for:
         - Updating ray distances and hit indicators based on raycasts
         - Calculating car speed based on steering and physics
-        - Computing rewards based on game events'
+        - Detecting reward collection (sending rewardCollected signal: 0 or 1)
+        - Detecting collisions (sending collisionDetected signal: 0 or 1)
         - Tracking respawns and elapsed time
+
+        Python server calculates actual reward values based on these signals.
 
         Args:
             game_state: Dictionary containing game state from Unity
-                Expected keys: rayDistances, rayHits, carSpeed, rewards, respawns, elapsedTime
+                Expected keys:
+                    - rayDistances: List[float] (5 values)
+                    - rayHits: List[int] (5 values, 0 or 1)
+                    - carSpeed: float
+                    - rewardCollected: int (0 or 1)
+                    - collisionDetected: int (0 or 1)
+                    - respawns: int
+                    - elapsedTime: float
         """
         self._current_state.update(game_state)
 
     def action_to_steering(self, action: int) -> int:
         """
         Convert action index to steering value for Unity.
+
+        This translation layer converts the RL model's discrete action space
+        to the game engine's input format.
 
         Args:
             action: Action index (0, 1, or 2)
@@ -285,6 +321,12 @@ class AutoDrivingEnv(gym.Env):
             # Print current state to console
             print(f"\n=== Step {self._episode_step} ===")
             print(f"Speed: {self._current_state['carSpeed']:.2f} / {self.max_speed}")
+
+            # Display signals from Unity
+            if self._current_state.get("rewardCollected", 0) == 1:
+                print("REWARD COLLECTED!")
+            if self._current_state.get("collisionDetected", 0) == 1:
+                print("COLLISION DETECTED!")
 
             ray_names = ["Forward", "Fwd-Left", "Fwd-Right", "Right", "Left"]
             print("Rays:")
@@ -315,6 +357,9 @@ if __name__ == "__main__":
         max_ray_distances=custom_ray_lengths,
         max_speed=2.5,
         steering_speed_penalty=0.5,
+        reward_collected_value=10.0,
+        collision_penalty=-10.0,
+        survival_reward=0.1,
     )
 
     # Test reset
@@ -330,12 +375,13 @@ if __name__ == "__main__":
     print("Testing with simulated game states")
     print("=" * 50)
 
-    # Simulate Unity sending game state
+    # Simulate Unity sending game state (normal movement)
     simulated_state = {
         "rayDistances": [25.0, 15.0, 20.0, 10.0, 18.0],
         "rayHits": [0, 1, 0, 0, 1],
         "carSpeed": 2.5,
-        "rewards": 1.0,
+        "rewardCollected": 0,
+        "collisionDetected": 0,
         "respawns": 0,
         "elapsedTime": 5.0,
     }
@@ -351,33 +397,39 @@ if __name__ == "__main__":
         print(
             f"\nAction: {action} ({action_names[action]}) - Steering: {env.action_to_steering(action)}"
         )
-        print(f"  Reward: {reward:.2f}")
+        print(f"  Reward: {reward:.2f} (survival reward)")
         print(f"  Terminated: {terminated}, Truncated: {truncated}")
 
         if terminated or truncated:
             break
 
-    # Test a few random steps
+    # Test reward collection
     print("\n" + "=" * 50)
-    print("Testing with random actions")
+    print("Testing reward collection")
     print("=" * 50)
 
-    for i in range(5):
-        action = env.action_space.sample()  # Random action (0, 1, or 2)
-        observation, reward, terminated, truncated, info = env.step(action)
+    simulated_state["rewardCollected"] = 1
+    env.update_state(simulated_state)
+    observation, reward, terminated, truncated, info = env.step(1)
+    print(f"Reward collected! Total reward: {reward:.2f} (survival + collection)")
+    env.render()
 
-        action_names = ["LEFT", "STRAIGHT", "RIGHT"]
-        print(f"\nStep {i+1}:")
-        print(
-            f"  Action: {action} ({action_names[action]}) - Steering: {env.action_to_steering(action)}"
-        )
-        print(f"  Reward: {reward:.2f}")
-        print(f"  Terminated: {terminated}, Truncated: {truncated}")
+    # Reset signal for next step
+    simulated_state["rewardCollected"] = 0
+    env.update_state(simulated_state)
 
-        env.render()
+    # Test collision
+    print("\n" + "=" * 50)
+    print("Testing collision detection")
+    print("=" * 50)
 
-        if terminated or truncated:
-            break
+    simulated_state["collisionDetected"] = 1
+    env.update_state(simulated_state)
+    observation, reward, terminated, truncated, info = env.step(1)
+    print(
+        f"Collision detected! Total reward: {reward:.2f} (survival + collision penalty), Terminated: {terminated}"
+    )
+    env.render()
 
     env.close()
     print("\n" + "=" * 50)

@@ -36,8 +36,21 @@ class DebugHelper:
 
     @staticmethod
     def print_game_state_summary(game_state: Dict[str, Any]) -> None:
-        """Print a summary of the received game state."""
-        rewards = game_state.get("rewards", 0)
+        """
+        Print a summary of the received game state.
+
+        Updated to match new game state structure:
+        - rewardCollected: 0/1 signal
+        - collisionDetected: 0/1 signal
+        - respawns: int
+        - elapsedTime: float
+        - carSpeed: float
+        - rayDistances: List[float]
+        - rayHits: List[int]
+        """
+        # Get game state fields
+        reward_collected = game_state.get("rewardCollected", 0)
+        collision_detected = game_state.get("collisionDetected", 0)
         respawns = game_state.get("respawns", 0)
         elapsed_time = game_state.get("elapsedTime", 0)
         car_speed = game_state.get("carSpeed", 0)
@@ -46,17 +59,27 @@ class DebugHelper:
         ray_distances = game_state.get("rayDistances", [])
         ray_hits = game_state.get("rayHits", [])
 
+        # Build summary
+        status_flags = []
+        if reward_collected == 1:
+            status_flags.append("REWARD")
+        if collision_detected == 1:
+            status_flags.append("COLLISION")
+
+        status_str = f" [{', '.join(status_flags)}]" if status_flags else ""
+
         summary = (
-            f"Game State - Rewards: {rewards}, Respawns: {respawns}, "
-            f"Time: {elapsed_time:.1f}s, Speed: {car_speed:.2f}"
+            f"Game State - Speed: {car_speed:.2f}, Time: {elapsed_time:.1f}s, "
+            f"Respawns: {respawns}{status_str}"
         )
         DebugHelper._logger.info(summary)
 
-        if len(ray_distances) >= 5:
+        # Print ray information
+        if len(ray_distances) >= 5 and len(ray_hits) >= 5:
             ray_names = ["Forward", "Fwd-Left", "Fwd-Right", "Right", "Left"]
-            for i, (name, dist, hit) in enumerate(
-                zip(ray_names, ray_distances, ray_hits)
-            ):
+            for i, name in enumerate(ray_names):
+                dist = ray_distances[i]
+                hit = ray_hits[i]
                 status = "HIT" if hit else "CLEAR"
                 DebugHelper._logger.info(f"  {name}: {dist:.2f} ({status})")
 
