@@ -74,7 +74,7 @@ class PPOController:
         # Parse observation
         ray_distances = observation[:5]
         ray_hits = observation[5:10]
-        speed = observation[10]
+        # speed = observation[10]
 
         # Forward ray is at index 0
         forward_dist = ray_distances[0]

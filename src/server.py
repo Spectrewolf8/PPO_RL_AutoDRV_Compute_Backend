@@ -64,8 +64,12 @@ class GameServer:
         self.model_path = model_path
 
         # Components
+        # Set receive timeout to 3x the tick interval (allows for some delay)
+        # Minimum 2 seconds to avoid false disconnects
+        receive_timeout_ms = max(2000, int(self.tick_interval * 3000))
+
         self.connection_manager = ConnectionManager(
-            host=host, port=port, timeout_ms=1000
+            host=host, port=port, timeout_ms=1000, receive_timeout_ms=receive_timeout_ms
         )
 
         # Initialize environment with ray distances from spec
@@ -184,7 +188,7 @@ class GameServer:
         self.episode_reward = 0.0
         self.message_count = 0
         self.last_tick_time = time.time()
-        self.first_message_received = False
+        # DON'T reset first_message_received here - it's per connection, not per episode
 
         # Reset environment
         observation, info = self.env.reset()
@@ -195,6 +199,12 @@ class GameServer:
     def _run_episode(self) -> None:
         """Run episode loop, processing game states and sending actions."""
         try:
+            # Check if client is still connected before receiving
+            if not self.connection_manager.is_connected:
+                logger.warning("Client connection lost")
+                self._handle_client_disconnect()
+                return
+
             # Receive game state from Unity
             game_state = self.connection_manager.receive_json()
 
@@ -287,8 +297,7 @@ class GameServer:
         message_id = game_state.get("id", -1)
         state_data = game_state.get("gameState", {})
 
-        # Log received state (condensed)
-        if self.episode_step % 10 == 0:  # Log every 10 steps to reduce spam
+        if self.episode_step:  # Log every 10 steps to reduce spam
             logger.info(
                 f"Step {self.episode_step} | MsgID: {message_id} | "
                 f"Speed: {state_data.get('carSpeed', 0):.2f} | "
@@ -437,21 +446,44 @@ class GameServer:
         logger.info(f"Average Tickrate: {self.actual_tickrate:.1f} Hz")
         logger.info("=" * 50)
 
-        # ❌ REMOVE THIS - Don't automatically restart!
-        # if self.connection_manager.is_connected:
-        #     logger.info("Waiting for Unity client to start new episode or disconnect...")
-        #     self.state = ServerState.EPISODE_RUNNING
-        #     self._start_new_episode()
-
-        # ✅ ADD THIS - Wait for Unity to send reset signal
-        logger.info("Episode ended. Waiting for Unity reset or disconnect...")
-        self.state = ServerState.WAITING_FOR_CLIENT  # Or create WAITING_FOR_RESET state
+        # Check if client is still connected
+        if self.connection_manager.check_connection():
+            # Client still connected, start new episode
+            logger.info("Client still connected. Starting new episode...")
+            self._start_new_episode()
+            self.state = ServerState.EPISODE_RUNNING
+        else:
+            # Client disconnected
+            logger.info("Client disconnected between episodes")
+            self._handle_client_disconnect()
 
     def _handle_client_disconnect(self) -> None:
-        """Handle Unity client disconnection."""
-        logger.info("Unity client disconnected")
+        """Handle Unity client disconnection and reset to initial state."""
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("CLIENT DISCONNECTED")
+        logger.info("=" * 60)
+
+        # Log session statistics if we had any episodes
+        if self.total_episodes > 0:
+            logger.info("Session Statistics:")
+            logger.info(f"  Total Episodes Completed: {self.total_episodes}")
+            logger.info(f"  Total Steps Processed: {self.total_steps}")
+            logger.info(
+                f"  Average Steps per Episode: {self.total_steps / max(self.total_episodes, 1):.1f}"
+            )
+
+        # Disconnect client at connection manager level
         self.connection_manager.disconnect_client()
+
+        # Reset to initial state
+        logger.info("Resetting server to initial state...")
         self.state = ServerState.WAITING_FOR_CLIENT
+        self.first_message_received = False
+
+        logger.info("Server ready for new client connection")
+        logger.info("=" * 60)
+        logger.info("")
 
     def set_tickrate(self, tickrate: int) -> None:
         """
@@ -519,7 +551,7 @@ def main():
     # Server configuration
     HOST = "127.0.0.1"
     PORT = 65432
-    TICKRATE = 30  # 30 updates per second
+    TICKRATE = 2  # 2 updates per second
     MODEL_PATH = None  # Set to model path if you have a trained model
 
     # Create and start server

@@ -21,7 +21,11 @@ class ConnectionManager:
     """
 
     def __init__(
-        self, host: str = "127.0.0.1", port: int = 65432, timeout_ms: int = 1000
+        self,
+        host: str = "127.0.0.1",
+        port: int = 65432,
+        timeout_ms: int = 1000,
+        receive_timeout_ms: int = 5000,
     ):
         """
         Initialize the ConnectionManager with ZeroMQ.
@@ -30,10 +34,12 @@ class ConnectionManager:
             host: Server host address
             port: Server port number
             timeout_ms: Socket timeout in milliseconds (for non-blocking operations)
+            receive_timeout_ms: Timeout for receiving messages during active connection (detects disconnects)
         """
         self.host = host
         self.port = port
         self.timeout_ms = timeout_ms
+        self.receive_timeout_ms = receive_timeout_ms
         self._context = None
         self._socket = None
         self._state = ConnectionState.DISCONNECTED
@@ -108,6 +114,26 @@ class ConnectionManager:
             self._state = ConnectionState.ERROR
             raise ConnectionError(f"Failed to accept client: {e}")
 
+    def check_connection(self) -> bool:
+        """
+        Check if the client is still connected.
+
+        Returns:
+            True if client is still connected, False otherwise
+        """
+        if not self.is_connected or not self._socket:
+            return False
+
+        try:
+            # Check socket status using ZMQ_EVENTS
+            self._socket.getsockopt(zmq.EVENTS)
+            # If we can query socket events, connection is likely still valid
+            return True
+        except (zmq.ZMQError, Exception):
+            # Socket error means disconnected
+            self._handle_disconnect()
+            return False
+
     def receive_raw(self) -> Optional[bytes]:
         """
         Receive raw bytes from the client.
@@ -125,10 +151,9 @@ class ConnectionManager:
                 delattr(self, "_pending_message")
                 return data
 
-            # Set a longer timeout for normal operation
-            self._socket.setsockopt(
-                zmq.RCVTIMEO, -1
-            )  # No timeout during active connection
+            # Use a reasonable timeout to detect disconnections
+            # instead of waiting indefinitely
+            self._socket.setsockopt(zmq.RCVTIMEO, self.receive_timeout_ms)
             data = self._socket.recv()
 
             if not data:
@@ -139,7 +164,8 @@ class ConnectionManager:
             return data
 
         except zmq.Again:
-            # Timeout
+            # Timeout - client likely disconnected or not responding
+            self._handle_disconnect()
             return None
         except (zmq.ZMQError, Exception):
             # Connection error
