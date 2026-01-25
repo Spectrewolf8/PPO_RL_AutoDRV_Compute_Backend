@@ -437,17 +437,15 @@ class GameServer:
         logger.info(f"Average Tickrate: {self.actual_tickrate:.1f} Hz")
         logger.info("=" * 50)
 
-        # Check if client is still connected
-        if self.connection_manager.is_connected:
-            # Wait for next game state or reset
-            logger.info(
-                "Waiting for Unity client to start new episode or disconnect..."
-            )
-            self.state = ServerState.EPISODE_RUNNING
-            self._start_new_episode()
-        else:
-            # Client disconnected
-            self._handle_client_disconnect()
+        # ❌ REMOVE THIS - Don't automatically restart!
+        # if self.connection_manager.is_connected:
+        #     logger.info("Waiting for Unity client to start new episode or disconnect...")
+        #     self.state = ServerState.EPISODE_RUNNING
+        #     self._start_new_episode()
+
+        # ✅ ADD THIS - Wait for Unity to send reset signal
+        logger.info("Episode ended. Waiting for Unity reset or disconnect...")
+        self.state = ServerState.WAITING_FOR_CLIENT  # Or create WAITING_FOR_RESET state
 
     def _handle_client_disconnect(self) -> None:
         """Handle Unity client disconnection."""
