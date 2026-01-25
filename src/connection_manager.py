@@ -1,6 +1,6 @@
 # connection_manager.py
 import json
-import socket
+import zmq
 from typing import Optional
 from enum import Enum
 
@@ -16,28 +16,29 @@ class ConnectionState(Enum):
 
 class ConnectionManager:
     """
-    Generic socket connection manager.
-    Completely independent and reusable for any TCP socket communication.
+    ZeroMQ-based connection manager using REP/REQ pattern.
+    Completely independent and reusable for any ZeroMQ REP/REQ communication.
     """
 
     def __init__(
-        self, host: str = "127.0.0.1", port: int = 65432, buffer_size: int = 4096
+        self, host: str = "127.0.0.1", port: int = 65432, timeout_ms: int = 1000
     ):
         """
-        Initialize the ConnectionManager.
+        Initialize the ConnectionManager with ZeroMQ.
 
         Args:
             host: Server host address
             port: Server port number
-            buffer_size: Size of receive buffer in bytes
+            timeout_ms: Socket timeout in milliseconds (for non-blocking operations)
         """
         self.host = host
         self.port = port
-        self.buffer_size = buffer_size
-        self._server_socket = None
-        self._client_socket = None
-        self._client_address = None
+        self.timeout_ms = timeout_ms
+        self._context = None
+        self._socket = None
         self._state = ConnectionState.DISCONNECTED
+        self._endpoint = f"tcp://{host}:{port}"
+        self._last_client_identity = None
 
     @property
     def state(self) -> ConnectionState:
@@ -50,22 +51,26 @@ class ConnectionManager:
         return self._state == ConnectionState.CONNECTED
 
     @property
-    def client_address(self) -> Optional[tuple]:
-        """Get the connected client's address."""
-        return self._client_address
+    def client_address(self) -> Optional[str]:
+        """Get the connected client's identity/address."""
+        return self._last_client_identity
 
     def create_server(self) -> bool:
         """
-        Create and bind the server socket.
+        Create and bind the ZeroMQ REP socket.
 
         Returns:
             True if server created successfully, False otherwise
         """
         try:
-            self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self._server_socket.bind((self.host, self.port))
-            self._server_socket.listen()
+            self._context = zmq.Context()
+            self._socket = self._context.socket(zmq.REP)
+
+            # Set socket options
+            self._socket.setsockopt(zmq.LINGER, 0)  # Don't wait on close
+            self._socket.setsockopt(zmq.RCVTIMEO, self.timeout_ms)  # Receive timeout
+
+            self._socket.bind(self._endpoint)
             self._state = ConnectionState.LISTENING
             return True
         except Exception as e:
@@ -74,18 +79,31 @@ class ConnectionManager:
 
     def accept_client(self) -> bool:
         """
-        Accept an incoming client connection (blocking).
+        Wait for an incoming client connection (blocking with timeout).
+        In ZeroMQ REP/REQ pattern, this waits for the first message.
 
         Returns:
-            True if client accepted successfully, False otherwise
+            True if client message received (connection established), False on timeout
         """
         if self._state != ConnectionState.LISTENING:
             return False
 
         try:
-            self._client_socket, self._client_address = self._server_socket.accept()
+            # ZeroMQ REP/REQ doesn't have explicit "accept" - we check for first message
+            # This is non-blocking due to RCVTIMEO
+            _ = self._socket.recv(zmq.NOBLOCK)
+
+            # If we received data, we need to send a response (REP/REQ pattern requirement)
+            # We'll store this message to be processed later
+            self._pending_message = _
             self._state = ConnectionState.CONNECTED
+            self._last_client_identity = (
+                self._endpoint
+            )  # ZeroMQ doesn't expose client address in REP/REQ
             return True
+        except zmq.Again:
+            # Timeout - no message received yet
+            return False
         except Exception as e:
             self._state = ConnectionState.ERROR
             raise ConnectionError(f"Failed to accept client: {e}")
@@ -101,19 +119,30 @@ class ConnectionManager:
             return None
 
         try:
-            data = self._client_socket.recv(self.buffer_size)
+            # Check if we have a pending message from accept_client
+            if hasattr(self, "_pending_message"):
+                data = self._pending_message
+                delattr(self, "_pending_message")
+                return data
+
+            # Set a longer timeout for normal operation
+            self._socket.setsockopt(
+                zmq.RCVTIMEO, -1
+            )  # No timeout during active connection
+            data = self._socket.recv()
 
             if not data:
-                # Connection closed by client
+                # Empty message - connection closed
                 self._handle_disconnect()
                 return None
 
             return data
 
-        except (ConnectionResetError, BrokenPipeError, socket.error):
-            self._handle_disconnect()
+        except zmq.Again:
+            # Timeout
             return None
-        except Exception:
+        except (zmq.ZMQError, Exception):
+            # Connection error
             self._handle_disconnect()
             return None
 
@@ -148,7 +177,7 @@ class ConnectionManager:
             return False
 
         try:
-            self._client_socket.sendall(data)
+            self._socket.send(data)
             return True
         except Exception:
             self._handle_disconnect()
@@ -187,30 +216,29 @@ class ConnectionManager:
         self._handle_disconnect()
 
     def close_server(self) -> None:
-        """Close the server socket and any active connections."""
-        self.disconnect_client()
-
-        if self._server_socket:
+        """Close the server socket and context."""
+        if self._socket:
             try:
-                self._server_socket.close()
+                self._socket.close()
             except Exception:
                 pass
-            self._server_socket = None
+            self._socket = None
+
+        if self._context:
+            try:
+                self._context.term()
+            except Exception:
+                pass
+            self._context = None
 
         self._state = ConnectionState.DISCONNECTED
 
     def _handle_disconnect(self) -> None:
         """Internal method to handle client disconnection."""
-        if self._client_socket:
-            try:
-                self._client_socket.close()
-            except Exception:
-                pass
-            self._client_socket = None
+        self._last_client_identity = None
 
-        self._client_address = None
-
-        if self._server_socket:
+        if self._socket and self._context:
+            # In ZeroMQ REP/REQ, we keep the socket open for new connections
             self._state = ConnectionState.LISTENING
         else:
             self._state = ConnectionState.DISCONNECTED
