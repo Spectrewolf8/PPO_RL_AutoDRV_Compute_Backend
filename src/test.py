@@ -461,10 +461,10 @@ class TestClient:
                     logger.error(f"Episode {episode_num + 1} failed")
                     break
 
-                # Small delay between episodes
+                # This simulates Unity preparing for next episode without disconnecting
                 if episode_num < self.num_episodes - 1:
-                    logger.info("Waiting 2 seconds before next episode...")
-                    time.sleep(2.0)
+                    logger.info("Brief pause before next episode...")
+                    time.sleep(1)  # 500ms - well under server timeout
 
             # Print final statistics
             self._print_final_statistics()
@@ -539,7 +539,7 @@ class TestClient:
             self._update_simulation_state(steering)
 
             # Log progress periodically
-            if self.episode_step % 10 == 0:
+            if self.episode_step:
                 logger.info(
                     f"  Step {self.episode_step:3d} | "
                     f"Steering: {steering:+.0f} | "

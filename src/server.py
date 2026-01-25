@@ -66,7 +66,7 @@ class GameServer:
         # Components
         # Set receive timeout to 3x the tick interval (allows for some delay)
         # Minimum 2 seconds to avoid false disconnects
-        receive_timeout_ms = max(2000, int(self.tick_interval * 3000))
+        receive_timeout_ms = max(5000, int(self.tick_interval * 3000))
 
         self.connection_manager = ConnectionManager(
             host=host, port=port, timeout_ms=1000, receive_timeout_ms=receive_timeout_ms
@@ -211,7 +211,7 @@ class GameServer:
             if game_state is None:
                 # Connection lost or timeout
                 logger.warning(
-                    "No data received from client (connection lost or timeout)"
+                    "No data received from client (connection lost/terminated/timeout)"
                 )
                 self._handle_client_disconnect()
                 return
@@ -251,8 +251,8 @@ class GameServer:
 
             self.message_count += 1
 
-            # Check if episode should end
-            if self._should_episode_end(game_state):
+            # Check if episode should end based on flags we calculated
+            if response.get("terminated", False) or response.get("truncated", False):
                 self.state = ServerState.EPISODE_ENDED
 
         except json.JSONDecodeError as e:
@@ -338,13 +338,20 @@ class GameServer:
                 f"    Collision detected! Penalty: {self.env.collision_penalty}"
             )
 
-        # Update step counter
+        # Check termination status BEFORE incrementing step counter
+        # This ensures we check based on the current step, not the next one
+        terminated = self._is_terminated(state_data)
+        truncated = (self.episode_step + 1) >= self.env._max_episode_steps
+
+        # Log truncation
+        if truncated:
+            logger.info(
+                f"Episode will truncate at max steps ({self.env._max_episode_steps})"
+            )
+
+        # Update step counter AFTER checking termination
         self.episode_step += 1
         self.total_steps += 1
-
-        # Check termination status for Unity
-        terminated = self._is_terminated(state_data)
-        truncated = self.episode_step >= self.env._max_episode_steps
 
         # Prepare response with full feedback for Unity UI
         response = {
@@ -402,31 +409,6 @@ class GameServer:
 
         # Respawn causes termination
         if state_data.get("respawns", 0) > 0:
-            return True
-
-        return False
-
-    def _should_episode_end(self, game_state: Dict[str, Any]) -> bool:
-        """
-        Determine if episode should end based on game state.
-
-        Args:
-            game_state: Full game state message from Unity
-
-        Returns:
-            True if episode should end
-        """
-        state_data = game_state.get("gameState", {})
-
-        # Check termination conditions
-        if self._is_terminated(state_data):
-            return True
-
-        # Check truncation (max steps)
-        if self.episode_step >= self.env._max_episode_steps:
-            logger.info(
-                f"Episode truncated at max steps ({self.env._max_episode_steps})"
-            )
             return True
 
         return False
@@ -551,7 +533,7 @@ def main():
     # Server configuration
     HOST = "127.0.0.1"
     PORT = 65432
-    TICKRATE = 2  # 2 updates per second
+    TICKRATE = 5  # 2 updates per second
     MODEL_PATH = None  # Set to model path if you have a trained model
 
     # Create and start server

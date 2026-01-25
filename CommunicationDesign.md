@@ -5,7 +5,9 @@
 **Server Address**: `127.0.0.1` (localhost)  
 **Port**: `65432`  
 **Protocol**: ZeroMQ (REQ/REP pattern) with JSON messaging  
-**Connection Type**: Client-Server (Unity = REQ Client, Python = REP Server)
+**Connection Type**: Client-Server (Unity = REQ Client, Python = REP Server)  
+**Receive Timeout**: Auto-configured based on tickrate (minimum 2 seconds, default 3× tick interval)  
+**Disconnect Detection**: Server automatically detects client disconnection via timeout and socket status checks
 
 ---
 
@@ -38,8 +40,14 @@ The server uses ZeroMQ's **Request-Reply (REQ/REP)** pattern:
 4. Unity: Receive config, synchronize tickrate
 5. Unity: Send actual game_state messages
 6. Server: Process and send steering commands
+7. Episodes continue on same connection until:
+   - Unity disconnects
+   - Server timeout (no message received within receive_timeout)
+   - Server shutdown
 
 ```
+
+**Important**: Configuration is sent **ONCE per connection**, not per episode. Multiple episodes can run on the same connection without re-handshaking.
 
 ### **Configuration Message (Server → Unity)**
 
@@ -88,6 +96,46 @@ Index 4: Left Ray         - Max Distance: 3.5
 - **Survival Reward**: `+0.1` per step
 - **Reward Collected**: `+15.0`
 - **Collision Penalty**: `-10.0`
+
+---
+
+## **MULTI-EPISODE SESSIONS & DISCONNECTION**
+
+### **Same Connection, Multiple Episodes**
+
+- Client stays connected across episodes
+- Server automatically starts new episode when previous ends (if client connected)
+- No re-handshake needed between episodes
+- Configuration received on first connection applies to all episodes in session
+
+### **Disconnection Detection**
+
+Server detects disconnection through:
+
+1. **Timeout**: No message received within `receive_timeout_ms` (calculated as `max(2000ms, tickrate_interval × 3)`)
+2. **Socket Status**: ZMQ socket event checks during episode transitions
+3. **Send Failures**: Unable to send response to client
+
+### **Server Behavior on Disconnect**
+
+When client disconnects:
+
+1. Server logs "CLIENT DISCONNECTED" with session statistics
+2. Server resets to `WAITING_FOR_CLIENT` state
+3. Connection manager state changes to `LISTENING`
+4. Server ready to accept new client connection
+5. Episode/step counters preserved for statistics
+
+### **Reconnection Protocol**
+
+If Unity needs to reconnect:
+
+1. Close existing socket
+2. Create new REQ socket
+3. Connect to server
+4. Send handshake (first game_state message)
+5. Receive new configuration
+6. Resume normal operation
 
 ---
 
@@ -166,285 +214,6 @@ Index 4: Left Ray         - Max Distance: 3.5
 | `-1`  | Turn LEFT   | Apply left steering input  |
 | `0`   | Go STRAIGHT | No steering input          |
 | `1`   | Turn RIGHT  | Apply right steering input |
-
----
-
-## **🔧 UNITY IMPLEMENTATION**
-
-### **Complete Unity Client Example**
-
-```csharp
-using NetMQ;
-using NetMQ.Sockets;
-using UnityEngine;
-
-public class PythonServerClient : MonoBehaviour
-{
-    private RequestSocket client;
-    private string serverAddress = "tcp://127.0.0.1:65432";
-
-    // Tickrate synchronization
-    private float tickInterval = 0.033f;  // Default 30Hz, will be updated from server
-    private float timeSinceLastUpdate = 0f;
-
-    // Message tracking
-    private int messageId = 0;
-    private bool isConfigured = false;
-
-    // Game state
-    private GameState currentState;
-    private int currentSteering = 0;
-
-    void Start()
-    {
-        InitializeConnection();
-    }
-
-    void InitializeConnection()
-    {
-        try
-        {
-            // Initialize NetMQ
-            AsyncIO.ForceDotNet.Force();
-            client = new RequestSocket();
-            client.Connect(serverAddress);
-            Debug.Log($"Connected to Python server at {serverAddress}");
-
-            // Send handshake and receive configuration
-            SendHandshakeAndConfigureSelf();
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Failed to connect to server: {e.Message}");
-        }
-    }
-
-    void SendHandshakeAndConfigureSelf()
-    {
-        // Send first message as handshake
-        GameStateMessage handshake = new GameStateMessage
-        {
-            message = "game_state",
-            id = messageId++,
-            gameState = InitializeGameState()
-        };
-
-        string json = JsonUtility.ToJson(handshake);
-        client.SendFrame(json);
-
-        // Receive configuration from server
-        string configJson = client.ReceiveFrameString();
-        ServerConfig config = JsonUtility.FromJson<ServerConfig>(configJson);
-
-        if (config.type == "config")
-        {
-            // Synchronize with server tickrate
-            tickInterval = config.tick_interval_ms / 1000f;  // Convert to seconds
-            isConfigured = true;
-
-            Debug.Log($"✓ Server Configuration Received:");
-            Debug.Log($"  Tickrate: {config.tickrate} Hz");
-            Debug.Log($"  Interval: {tickInterval}s ({config.tick_interval_ms}ms)");
-            Debug.Log($"  Max Episode Steps: {config.max_episode_steps}");
-        }
-        else
-        {
-            Debug.LogError("Expected config message but received something else!");
-        }
-    }
-
-    void Update()
-    {
-        if (!isConfigured) return;
-
-        timeSinceLastUpdate += Time.deltaTime;
-
-        // Send updates at server's tickrate
-        if (timeSinceLastUpdate >= tickInterval)
-        {
-            UpdateGameState();
-            ServerResponse response = SendGameStateAndGetResponse();
-
-            // Apply steering
-            ApplySteering(response.steering);
-
-            // Update UI with feedback
-            UpdateUI(response);
-
-            // Handle episode end
-            if (response.terminated || response.truncated)
-            {
-                OnEpisodeEnd(response);
-            }
-
-            timeSinceLastUpdate = 0f;
-        }
-    }
-
-    void UpdateGameState()
-    {
-        // Update raycasts
-        UpdateRaycasts();
-
-        // Update car speed
-        currentState.carSpeed = GetComponent<Rigidbody>().velocity.magnitude;
-
-        // Update elapsed time
-        currentState.elapsedTime += Time.deltaTime;
-    }
-
-    ServerResponse SendGameStateAndGetResponse()
-    {
-        GameStateMessage msg = new GameStateMessage
-        {
-            message = "game_state",
-            id = messageId++,
-            gameState = currentState
-        };
-
-        string json = JsonUtility.ToJson(msg);
-        client.SendFrame(json);
-
-        string response = client.ReceiveFrameString();
-        ServerResponse resp = JsonUtility.FromJson<ServerResponse>(response);
-
-        // Reset single-frame signals after sending
-        currentState.rewardCollected = 0;
-        currentState.collisionDetected = 0;
-
-        return resp;
-    }
-
-    void UpdateRaycasts()
-    {
-        // Ray 0: Forward (7.0 max)
-        currentState.rayDistances[0] = CastRay(transform.forward, 7.0f, 0);
-
-        // Ray 1: Forward-Left 45° (4.5 max)
-        currentState.rayDistances[1] = CastRay(
-            Quaternion.Euler(0, -45, 0) * transform.forward, 4.5f, 1);
-
-        // Ray 2: Forward-Right 45° (4.5 max)
-        currentState.rayDistances[2] = CastRay(
-            Quaternion.Euler(0, 45, 0) * transform.forward, 4.5f, 2);
-
-        // Ray 3: Right 90° (3.5 max)
-        currentState.rayDistances[3] = CastRay(transform.right, 3.5f, 3);
-
-        // Ray 4: Left -90° (3.5 max)
-        currentState.rayDistances[4] = CastRay(-transform.right, 3.5f, 4);
-    }
-
-    float CastRay(Vector3 direction, float maxDistance, int index)
-    {
-        RaycastHit hit;
-        if (Physics.Raycast(transform.position, direction, out hit, maxDistance))
-        {
-            currentState.rayHits[index] = 1;
-            return hit.distance;
-        }
-        currentState.rayHits[index] = 0;
-        return maxDistance;
-    }
-
-    void ApplySteering(int steering)
-    {
-        currentSteering = steering;
-        float steerInput = steering;  // -1, 0, or 1
-
-        // Apply to your car controller
-        // Example: GetComponent<CarController>().SetSteering(steerInput);
-    }
-
-    void UpdateUI(ServerResponse response)
-    {
-        // Update UI text elements (assign these in Inspector)
-        // rewardText.text = $"Reward: {response.reward:F2}";
-        // episodeRewardText.text = $"Episode Total: {response.episode_reward:F2}";
-        // stepText.text = $"Step: {response.step} / 1000";
-        // episodeText.text = $"Episode: {response.episode}";
-        // totalStepsText.text = $"Total Steps: {response.total_steps}";
-    }
-
-    void OnEpisodeEnd(ServerResponse response)
-    {
-        string reason = response.terminated ? "Collision/Respawn" : "Max Steps";
-        Debug.Log($"Episode {response.episode} ended ({reason}). Total Reward: {response.episode_reward:F2}");
-
-        // Optional: Show episode summary UI
-        // episodeSummaryPanel.SetActive(true);
-        // summaryText.text = $"Episode {response.episode}\nReward: {response.episode_reward:F2}\nSteps: {response.step}";
-    }
-
-    // Signal methods (call these when events occur)
-    public void OnRewardCollected()
-    {
-        currentState.rewardCollected = 1;
-    }
-
-    public void OnCollisionDetected()
-    {
-        currentState.collisionDetected = 1;
-    }
-
-    void OnDestroy()
-    {
-        client?.Close();
-        NetMQConfig.Cleanup();
-    }
-
-    // Data classes
-    [System.Serializable]
-    public class GameStateMessage
-    {
-        public string message;
-        public int id;
-        public GameState gameState;
-    }
-
-    [System.Serializable]
-    public class GameState
-    {
-        public float[] rayDistances = new float[5];
-        public int[] rayHits = new int[5];
-        public float carSpeed;
-        public int rewardCollected;
-        public int collisionDetected;
-        public int respawns;
-        public float elapsedTime;
-    }
-
-    [System.Serializable]
-    public class ServerConfig
-    {
-        public string type;
-        public int tickrate;
-        public float tick_interval_ms;
-        public int max_episode_steps;
-        public string message;
-    }
-
-    [System.Serializable]
-    public class ServerResponse
-    {
-        public int steering;
-        public float reward;
-        public float episode_reward;
-        public int step;
-        public int total_steps;
-        public int episode;
-        public int total_episodes;
-        public bool terminated;
-        public bool truncated;
-    }
-
-    GameState InitializeGameState()
-    {
-        currentState = new GameState();
-        return currentState;
-    }
-}
-```
 
 ---
 
@@ -589,33 +358,22 @@ using UnityEngine;
 
 ---
 
-## **🐛 TROUBLESHOOTING**
-
-| Problem                  | Solution                                      |
-| ------------------------ | --------------------------------------------- |
-| "Address already in use" | Restart Python server                         |
-| Unity hangs on send      | Check server is running, verify IP/port       |
-| Tickrate mismatch        | Ensure config handshake completes             |
-| Steering not applied     | Check steering values are exactly -1, 0, or 1 |
-| Rewards not detected     | Verify signal flags reset after each send     |
-| Connection drops         | Implement try-catch and reconnection logic    |
-
----
-
 ## **📋 QUICK REFERENCE**
 
 ### **Server Configuration (Default)**
 
 - Host: `127.0.0.1`
 - Port: `65432`
-- Default Tickrate: `30 Hz`
+- Default Tickrate: `30 Hz` (configurable in server.py main())
 - Max Episode Steps: `1000`
+- Receive Timeout: `max(2000ms, tickrate_interval × 3)`
+- Accept Timeout: `1000ms` (for new client connections)
 
 ### **Message Types**
 
-- **config**: Server → Unity (first message only)
-- **game_state**: Unity → Server (every tick)
-- **response**: Server → Unity (steering + rewards + episode stats)
+- **config**: Server → Unity (first message of connection only, NOT per episode)
+- **game_state**: Unity → Server (every tick, all episodes)
+- **response**: Server → Unity (steering + rewards + episode stats, every tick)
 
 ### **Steering Commands**
 
