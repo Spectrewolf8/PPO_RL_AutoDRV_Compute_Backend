@@ -9,7 +9,6 @@ from environment import AutoDrivingEnv
 from ppo_controller import PPOController
 
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -21,11 +20,10 @@ logger = logging.getLogger(__name__)
 class ServerState(Enum):
     """Server operational states."""
 
-    IDLE = 0
-    WAITING_FOR_CLIENT = 1
-    EPISODE_RUNNING = 2
-    EPISODE_ENDED = 3
-    SHUTTING_DOWN = 4
+    WAITING_FOR_CLIENT = 0
+    EPISODE_RUNNING = 1
+    EPISODE_ENDED = 2
+    SHUTTING_DOWN = 3
 
 
 class GameServer:
@@ -60,27 +58,18 @@ class GameServer:
         self.host = host
         self.port = port
         self.tickrate = tickrate
-        self.tick_interval = 1.0 / tickrate  # Time between ticks in seconds
+        self.tick_interval = 1.0 / tickrate
         self.model_path = model_path
 
-        # Components
-        # Set receive timeout to 3x the tick interval (allows for some delay)
-        # Minimum 2 seconds to avoid false disconnects
+        # Set receive timeout to 3x tick interval, minimum 5 seconds
         receive_timeout_ms = max(5000, int(self.tick_interval * 3000))
 
         self.connection_manager = ConnectionManager(
             host=host, port=port, timeout_ms=1000, receive_timeout_ms=receive_timeout_ms
         )
 
-        # Initialize environment with ray distances from spec
         self.env = AutoDrivingEnv(
-            max_ray_distances=[
-                7.0,
-                4.5,
-                4.5,
-                3.5,
-                3.5,
-            ],  # front, front-left, front-right, left, right
+            max_ray_distances=[7.0, 4.5, 4.5, 3.5, 3.5],
             max_speed=2.5,
             steering_speed_penalty=0.5,
             reward_collected_value=15.0,
@@ -91,7 +80,7 @@ class GameServer:
         self.controller = PPOController(self.env)
 
         # Server state
-        self.state = ServerState.IDLE
+        self.state = ServerState.WAITING_FOR_CLIENT
         self.running = False
 
         # Episode tracking
@@ -107,19 +96,13 @@ class GameServer:
         # Performance metrics
         self.last_tick_time = 0.0
         self.actual_tickrate = 0.0
-        self.message_count = 0
 
         logger.info(
             f"GameServer initialized - Host: {host}, Port: {port}, Tickrate: {tickrate} Hz"
         )
 
     def load_model(self, model_path: str) -> None:
-        """
-        Load a trained PPO model.
-
-        Args:
-            model_path: Path to the saved model
-        """
+        """Load a trained PPO model."""
         logger.info(f"Loading PPO model from {model_path}")
         self.controller.load_model(model_path)
 
@@ -128,18 +111,13 @@ class GameServer:
         logger.info("Starting game server...")
 
         try:
-            # Create and bind server socket
             self.connection_manager.create_server()
             logger.info(f"Server listening on {self.host}:{self.port}")
 
             self.running = True
-            self.state = ServerState.WAITING_FOR_CLIENT
-
-            # Load model if path provided
             if self.model_path:
                 self.load_model(self.model_path)
 
-            # Main server loop
             self._run_server_loop()
 
         except KeyboardInterrupt:
@@ -154,43 +132,36 @@ class GameServer:
         while self.running:
             if self.state == ServerState.WAITING_FOR_CLIENT:
                 self._wait_for_client()
-
             elif self.state == ServerState.EPISODE_RUNNING:
                 self._run_episode()
-
             elif self.state == ServerState.EPISODE_ENDED:
                 self._handle_episode_end()
-
             elif self.state == ServerState.SHUTTING_DOWN:
                 break
 
-            # Small sleep to prevent busy waiting
-            time.sleep(0.001)
+            time.sleep(0.001)  # Prevent busy waiting
 
     def _wait_for_client(self) -> None:
         """Wait for Unity client to connect."""
         logger.info("Waiting for Unity client to connect...")
 
         while self.running and self.state == ServerState.WAITING_FOR_CLIENT:
-            # Try to accept client (non-blocking with timeout)
             if self.connection_manager.accept_client():
                 logger.info("Unity client connected!")
                 self._start_new_episode()
                 self.state = ServerState.EPISODE_RUNNING
                 break
 
-            time.sleep(0.1)  # Check every 100ms
+            time.sleep(0.1)
 
     def _start_new_episode(self) -> None:
         """Start a new episode."""
         self.current_episode += 1
         self.episode_step = 0
         self.episode_reward = 0.0
-        self.message_count = 0
         self.last_tick_time = time.time()
-        # DON'T reset first_message_received here - it's per connection, not per episode
+        # first_message_received is per connection, not reset per episode
 
-        # Reset environment
         observation, info = self.env.reset()
 
         logger.info(f"=== Episode {self.current_episode} Started ===")
@@ -199,20 +170,11 @@ class GameServer:
     def _run_episode(self) -> None:
         """Run episode loop, processing game states and sending actions."""
         try:
-            # Check if client is still connected before receiving
-            if not self.connection_manager.is_connected:
-                logger.warning("Client connection lost")
-                self._handle_client_disconnect()
-                return
-
             # Receive game state from Unity
             game_state = self.connection_manager.receive_json()
 
             if game_state is None:
-                # Connection lost or timeout
-                logger.warning(
-                    "No data received from client (connection lost/terminated/timeout)"
-                )
+                logger.warning("No data received from client (connection lost/timeout)")
                 self._handle_client_disconnect()
                 return
 
@@ -227,9 +189,7 @@ class GameServer:
             time_since_last_tick = current_time - self.last_tick_time
 
             if time_since_last_tick < self.tick_interval:
-                # Too fast, wait before processing
-                sleep_time = self.tick_interval - time_since_last_tick
-                time.sleep(sleep_time)
+                time.sleep(self.tick_interval - time_since_last_tick)
                 current_time = time.time()
 
             # Calculate actual tickrate
@@ -240,19 +200,16 @@ class GameServer:
             )
             self.last_tick_time = current_time
 
-            # Process the game state
+            # Process the game state and send response
             response = self._process_game_state(game_state)
 
-            # Send response back to Unity
             if not self.connection_manager.send_json(response):
                 logger.error("Failed to send response to Unity client")
                 self._handle_client_disconnect()
                 return
 
-            self.message_count += 1
-
-            # Check if episode should end based on flags we calculated
-            if response.get("terminated", False) or response.get("truncated", False):
+            # Check if episode should end based on termination flags
+            if response.get("terminated") or response.get("truncated"):
                 self.state = ServerState.EPISODE_ENDED
 
         except json.JSONDecodeError as e:
@@ -262,10 +219,7 @@ class GameServer:
             self._handle_client_disconnect()
 
     def _send_initial_configuration(self) -> None:
-        """
-        Send initial configuration to Unity client including tickrate.
-        This is sent as response to the first message from client.
-        """
+        """Send initial configuration to Unity client including tickrate."""
         config = {
             "type": "config",
             "tickrate": self.tickrate,
@@ -276,7 +230,7 @@ class GameServer:
 
         if self.connection_manager.send_json(config):
             logger.info(
-                f"Sent configuration to Unity client: Tickrate={self.tickrate} Hz, Interval={self.tick_interval*1000:.2f}ms"
+                f"Sent configuration: Tickrate={self.tickrate} Hz, Interval={self.tick_interval*1000:.2f}ms"
             )
         else:
             logger.error("Failed to send configuration to Unity client")
@@ -292,15 +246,13 @@ class GameServer:
         Returns:
             Response dictionary with steering command and episode statistics
         """
-        # Extract message info
-        message_type = game_state.get("message", "unknown")
-        message_id = game_state.get("id", -1)
         state_data = game_state.get("gameState", {})
+        message_type = game_state.get("message", "unknown")
 
-        if self.episode_step:  # Log every 10 steps to reduce spam
+        # Periodic logging
+        if self.episode_step:
             logger.info(
-                f"Step {self.episode_step} | MsgID: {message_id} | "
-                f"Speed: {state_data.get('carSpeed', 0):.2f} | "
+                f"Step {self.episode_step} | Speed: {state_data.get('carSpeed', 0):.2f} | "
                 f"Rays: {[f'{d:.1f}' for d in state_data.get('rayDistances', [])]}"
             )
 
@@ -310,51 +262,43 @@ class GameServer:
             self.state = ServerState.EPISODE_ENDED
             return {"steering": 0}
 
-        # Update environment with new state
+        # Update environment and get action
         self.env.update_state(state_data)
-
-        # Get observation
-        # observation = self.env._get_observation()
-
-        # Calculate reward
-        reward = self._calculate_reward(state_data)
-        self.episode_reward += reward
-
-        # Check for terminal conditions
-        # terminated = self._is_terminated(state_data)
-        # truncated = self.episode_step >= self.env._max_episode_steps
-
-        # Get action from PPO controller
         action, steering = self.controller.get_action(state_data)
 
-        # Log important events
+        # Calculate reward (inlined for simplicity)
+        reward = self.env.survival_reward
         if state_data.get("rewardCollected", 0) == 1:
+            reward += self.env.reward_collected_value
             logger.info(
                 f"      Reward cube collected! Reward: +{self.env.reward_collected_value}"
             )
-
         if state_data.get("collisionDetected", 0) == 1:
+            reward += self.env.collision_penalty
             logger.warning(
                 f"    Collision detected! Penalty: {self.env.collision_penalty}"
             )
 
-        # Check termination status BEFORE incrementing step counter
-        # This ensures we check based on the current step, not the next one
-        terminated = self._is_terminated(state_data)
+        self.episode_reward += reward
+
+        # Check termination (inlined for simplicity)
+        terminated = (
+            state_data.get("collisionDetected", 0) == 1
+            or state_data.get("respawns", 0) > 0
+        )
         truncated = (self.episode_step + 1) >= self.env._max_episode_steps
 
-        # Log truncation
         if truncated:
             logger.info(
                 f"Episode will truncate at max steps ({self.env._max_episode_steps})"
             )
 
-        # Update step counter AFTER checking termination
+        # Update counters AFTER checking termination
         self.episode_step += 1
         self.total_steps += 1
 
-        # Prepare response with full feedback for Unity UI
-        response = {
+        # Build response
+        return {
             "steering": steering,
             "reward": reward,
             "episode_reward": self.episode_reward,
@@ -365,53 +309,6 @@ class GameServer:
             "terminated": terminated,
             "truncated": truncated,
         }
-
-        return response
-
-    def _calculate_reward(self, state_data: Dict[str, Any]) -> float:
-        """
-        Calculate reward based on game state signals.
-
-        Args:
-            state_data: Game state data from Unity
-
-        Returns:
-            Calculated reward value
-        """
-        reward = 0.0
-
-        # Survival reward (always given per step)
-        reward += self.env.survival_reward
-
-        # Reward for collecting reward cube
-        if state_data.get("rewardCollected", 0) == 1:
-            reward += self.env.reward_collected_value
-
-        # Penalty for collision
-        if state_data.get("collisionDetected", 0) == 1:
-            reward += self.env.collision_penalty
-
-        return reward
-
-    def _is_terminated(self, state_data: Dict[str, Any]) -> bool:
-        """
-        Check if episode should terminate.
-
-        Args:
-            state_data: Game state data from Unity
-
-        Returns:
-            True if episode should terminate
-        """
-        # Collision causes termination
-        if state_data.get("collisionDetected", 0) == 1:
-            return True
-
-        # Respawn causes termination
-        if state_data.get("respawns", 0) > 0:
-            return True
-
-        return False
 
     def _handle_episode_end(self) -> None:
         """Handle episode end, log statistics, and prepare for next episode."""
@@ -424,18 +321,15 @@ class GameServer:
         logger.info(
             f"Average Reward: {self.episode_reward / max(self.episode_step, 1):.3f}"
         )
-        logger.info(f"Messages Processed: {self.message_count}")
         logger.info(f"Average Tickrate: {self.actual_tickrate:.1f} Hz")
         logger.info("=" * 50)
 
         # Check if client is still connected
         if self.connection_manager.check_connection():
-            # Client still connected, start new episode
             logger.info("Client still connected. Starting new episode...")
             self._start_new_episode()
             self.state = ServerState.EPISODE_RUNNING
         else:
-            # Client disconnected
             logger.info("Client disconnected between episodes")
             self._handle_client_disconnect()
 
@@ -446,7 +340,7 @@ class GameServer:
         logger.info("CLIENT DISCONNECTED")
         logger.info("=" * 60)
 
-        # Log session statistics if we had any episodes
+        # Log session statistics
         if self.total_episodes > 0:
             logger.info("Session Statistics:")
             logger.info(f"  Total Episodes Completed: {self.total_episodes}")
@@ -455,7 +349,6 @@ class GameServer:
                 f"  Average Steps per Episode: {self.total_steps / max(self.total_episodes, 1):.1f}"
             )
 
-        # Disconnect client at connection manager level
         self.connection_manager.disconnect_client()
 
         # Reset to initial state
@@ -468,12 +361,7 @@ class GameServer:
         logger.info("")
 
     def set_tickrate(self, tickrate: int) -> None:
-        """
-        Change the server tickrate dynamically.
-
-        Args:
-            tickrate: New tickrate in Hz (updates per second)
-        """
+        """Change the server tickrate dynamically."""
         if tickrate <= 0:
             logger.warning(f"Invalid tickrate {tickrate}, must be > 0")
             return
@@ -485,12 +373,7 @@ class GameServer:
         )
 
     def get_statistics(self) -> Dict[str, Any]:
-        """
-        Get server statistics.
-
-        Returns:
-            Dictionary containing server statistics
-        """
+        """Get server statistics."""
         return {
             "total_episodes": self.total_episodes,
             "total_steps": self.total_steps,
@@ -509,11 +392,9 @@ class GameServer:
         self.running = False
         self.state = ServerState.SHUTTING_DOWN
 
-        # Disconnect client if connected
         if self.connection_manager.is_connected:
             self.connection_manager.disconnect_client()
 
-        # Close server
         self.connection_manager.close_server()
 
         # Log final statistics
