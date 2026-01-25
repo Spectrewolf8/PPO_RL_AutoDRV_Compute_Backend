@@ -1,6 +1,3 @@
-I'll update the documentation to reflect the new tickrate synchronization feature in a concise, Unity-focused way.
-
-```markdown
 # **Unity Communication Controller - Complete Specification**
 
 ## **CONNECTION DETAILS**
@@ -32,6 +29,7 @@ The server uses ZeroMQ's **Request-Reply (REQ/REP)** pattern:
 ## **INITIAL HANDSHAKE & CONFIGURATION**
 
 ### **First Connection Flow**
+
 ```
 
 1. Unity: Connect to server
@@ -41,7 +39,7 @@ The server uses ZeroMQ's **Request-Reply (REQ/REP)** pattern:
 5. Unity: Send actual game_state messages
 6. Server: Process and send steering commands
 
-````
+```
 
 ### **Configuration Message (Server → Unity)**
 
@@ -55,7 +53,7 @@ The server uses ZeroMQ's **Request-Reply (REQ/REP)** pattern:
   "max_episode_steps": 1000,
   "message": "Server configuration. Please synchronize your update rate."
 }
-````
+```
 
 | Field               | Type   | Description                                   |
 | ------------------- | ------ | --------------------------------------------- |
@@ -129,15 +127,37 @@ Index 4: Left Ray         - Max Distance: 3.5
 
 ---
 
-## **📥 PYTHON → UNITY (Steering Reply)**
+## **📥 PYTHON → UNITY (Action & Feedback Reply)**
 
 ### **Message Structure**
 
 ```json
 {
-  "steering": -1
+  "steering": 0,
+  "reward": 0.1,
+  "episode_reward": 15.3,
+  "step": 42,
+  "total_steps": 1337,
+  "episode": 5,
+  "total_episodes": 5,
+  "terminated": false,
+  "truncated": false
 }
 ```
+
+### **Field Specifications**
+
+| Field            | Type  | Description                                          |
+| ---------------- | ----- | ---------------------------------------------------- |
+| `steering`       | int   | Steering command: -1 (left), 0 (straight), 1 (right) |
+| `reward`         | float | Reward received for this step                        |
+| `episode_reward` | float | Cumulative reward for current episode                |
+| `step`           | int   | Current step number in episode                       |
+| `total_steps`    | int   | Total steps across all episodes                      |
+| `episode`        | int   | Current episode number                               |
+| `total_episodes` | int   | Total episodes completed                             |
+| `terminated`     | bool  | Episode ended due to collision/respawn               |
+| `truncated`      | bool  | Episode ended due to max steps reached               |
 
 ### **Steering Values**
 
@@ -243,8 +263,19 @@ public class PythonServerClient : MonoBehaviour
         if (timeSinceLastUpdate >= tickInterval)
         {
             UpdateGameState();
-            int steering = SendGameStateAndGetSteering();
-            ApplySteering(steering);
+            ServerResponse response = SendGameStateAndGetResponse();
+
+            // Apply steering
+            ApplySteering(response.steering);
+
+            // Update UI with feedback
+            UpdateUI(response);
+
+            // Handle episode end
+            if (response.terminated || response.truncated)
+            {
+                OnEpisodeEnd(response);
+            }
 
             timeSinceLastUpdate = 0f;
         }
@@ -262,7 +293,7 @@ public class PythonServerClient : MonoBehaviour
         currentState.elapsedTime += Time.deltaTime;
     }
 
-    int SendGameStateAndGetSteering()
+    ServerResponse SendGameStateAndGetResponse()
     {
         GameStateMessage msg = new GameStateMessage
         {
@@ -281,7 +312,7 @@ public class PythonServerClient : MonoBehaviour
         currentState.rewardCollected = 0;
         currentState.collisionDetected = 0;
 
-        return resp.steering;
+        return resp;
     }
 
     void UpdateRaycasts()
@@ -323,6 +354,26 @@ public class PythonServerClient : MonoBehaviour
 
         // Apply to your car controller
         // Example: GetComponent<CarController>().SetSteering(steerInput);
+    }
+
+    void UpdateUI(ServerResponse response)
+    {
+        // Update UI text elements (assign these in Inspector)
+        // rewardText.text = $"Reward: {response.reward:F2}";
+        // episodeRewardText.text = $"Episode Total: {response.episode_reward:F2}";
+        // stepText.text = $"Step: {response.step} / 1000";
+        // episodeText.text = $"Episode: {response.episode}";
+        // totalStepsText.text = $"Total Steps: {response.total_steps}";
+    }
+
+    void OnEpisodeEnd(ServerResponse response)
+    {
+        string reason = response.terminated ? "Collision/Respawn" : "Max Steps";
+        Debug.Log($"Episode {response.episode} ended ({reason}). Total Reward: {response.episode_reward:F2}");
+
+        // Optional: Show episode summary UI
+        // episodeSummaryPanel.SetActive(true);
+        // summaryText.text = $"Episode {response.episode}\nReward: {response.episode_reward:F2}\nSteps: {response.step}";
     }
 
     // Signal methods (call these when events occur)
@@ -377,6 +428,14 @@ public class PythonServerClient : MonoBehaviour
     public class ServerResponse
     {
         public int steering;
+        public float reward;
+        public float episode_reward;
+        public int step;
+        public int total_steps;
+        public int episode;
+        public int total_episodes;
+        public bool terminated;
+        public bool truncated;
     }
 
     GameState InitializeGameState()
@@ -405,20 +464,23 @@ Unity                           Python Server
   | (Synchronize tickrate)           |
   |                                  |
   |--4. Send game_state (id:1) ----->| (Process state, get action)
-  |<-5. Receive steering: 0 ---------|
+  |<-5. Receive response ------------|
+  |   {steering:0, reward:0.1, ...}  |
   | (Apply steering)                 |
   | (Wait tick_interval)             |
   |                                  |
-  |--6. Send game_state (id:2) ----->| (Process state, reward: +15)
+  |--6. Send game_state (id:2) ----->| (Process state, reward: +15.1)
   |    rewardCollected: 1            | (Log: "Reward collected!")
-  |<-7. Receive steering: 1 ---------|
+  |<-7. Receive response ------------|
+  |   {steering:1, reward:15.1, ...} |
   | (Apply steering)                 |
   | (Wait tick_interval)             |
   |                                  |
-  |--8. Send game_state (id:3) ----->| (Process state, penalty: -10)
+  |--8. Send game_state (id:3) ----->| (Process state, penalty: -9.9)
   |    collisionDetected: 1          | (Log: "Collision detected!")
   |                                  | (Episode ends)
-  |<-9. Receive steering: 0 ---------|
+  |<-9. Receive response ------------|
+  |   {steering:0, terminated:true}  |
   |                                  | (New episode starts)
   |                                  |
   |--10. Continue loop ------------->|
@@ -553,7 +615,7 @@ using UnityEngine;
 
 - **config**: Server → Unity (first message only)
 - **game_state**: Unity → Server (every tick)
-- **steering**: Server → Unity (response to game_state)
+- **response**: Server → Unity (steering + rewards + episode stats)
 
 ### **Steering Commands**
 

@@ -272,7 +272,7 @@ class GameServer:
             logger.error("Failed to send configuration to Unity client")
             self._handle_client_disconnect()
 
-    def _process_game_state(self, game_state: Dict[str, Any]) -> Dict[str, int]:
+    def _process_game_state(self, game_state: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process received game state and generate action.
 
@@ -280,7 +280,7 @@ class GameServer:
             game_state: Game state dictionary from Unity
 
         Returns:
-            Response dictionary with steering command
+            Response dictionary with steering command and episode statistics
         """
         # Extract message info
         message_type = game_state.get("message", "unknown")
@@ -333,8 +333,22 @@ class GameServer:
         self.episode_step += 1
         self.total_steps += 1
 
-        # Prepare response
-        response = {"steering": steering}
+        # Check termination status for Unity
+        terminated = self._is_terminated(state_data)
+        truncated = self.episode_step >= self.env._max_episode_steps
+
+        # Prepare response with full feedback for Unity UI
+        response = {
+            "steering": steering,
+            "reward": reward,
+            "episode_reward": self.episode_reward,
+            "step": self.episode_step,
+            "total_steps": self.total_steps,
+            "episode": self.current_episode,
+            "total_episodes": self.total_episodes,
+            "terminated": terminated,
+            "truncated": truncated,
+        }
 
         return response
 
