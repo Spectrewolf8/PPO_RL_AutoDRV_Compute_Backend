@@ -1,5 +1,7 @@
 from typing import Dict, Any, Tuple
 from environment import AutoDrivingEnv
+from ppo_model import PPO
+import os
 
 
 class PPOController:
@@ -16,7 +18,7 @@ class PPOController:
             env: AutoDrivingEnv instance
         """
         self.env = env
-        self.ppo_model = None  # Placeholder for trained model
+        self.ppo_model = None  # Will be PPO instance when loaded
 
     def load_model(self, model_path: str) -> None:
         """
@@ -25,10 +27,24 @@ class PPOController:
         Args:
             model_path: Path to the saved model
         """
-        # TODO: Implement model loading
-        # from stable_baselines3 import PPO
-        # self.ppo_model = PPO.load(model_path)
-        print("Model loading not implemented yet. Using rule-based policy.")
+        try:
+            if not os.path.exists(model_path):
+                print(f"Model file not found: {model_path}. Using rule-based policy.")
+                return
+
+            # Initialize PPO model with correct dimensions
+            self.ppo_model = PPO(
+                state_dim=11,  # AutoDrivingEnv observation space
+                action_dim=3,  # Discrete actions: left, straight, right
+            )
+
+            # Load trained weights
+            self.ppo_model.load(model_path)
+            print(f"PPO model loaded successfully from {model_path}")
+
+        except Exception as e:
+            print(f"Error loading model: {e}. Using rule-based policy.")
+            self.ppo_model = None
 
     def get_action(self, game_state: Dict[str, Any]) -> Tuple[int, int]:
         """
@@ -48,7 +64,7 @@ class PPOController:
 
         # Get action from model or rule-based policy
         if self.ppo_model is not None:
-            # Use trained model
+            # Use trained model (deterministic for inference)
             action, _ = self.ppo_model.predict(observation, deterministic=True)
         else:
             # Use rule-based policy
@@ -67,7 +83,7 @@ class PPOController:
             observation: Numpy array [ray_distances(5), ray_hits(5), speed(1)]
 
         Returns:
-            Action: 0 (left) or 1 (right)
+            Action: 0 (left), 1 (straight), or 2 (right)
         """
         import random
 
@@ -92,15 +108,15 @@ class PPOController:
             if right_hit and right_dist < left_dist:
                 return 0  # Turn left
             elif left_hit:
-                return 1  # Turn right
+                return 2  # Turn right
             else:
-                return random.choice([0, 1])  # Random turn
+                return random.choice([0, 2])  # Random turn (not straight)
 
         # Fine adjustments based on side rays
         elif right_hit and right_dist < 1.5:
             return 0  # Turn left
         elif left_hit and left_dist < 1.5:
-            return 1  # Turn right
+            return 2  # Turn right
         else:
-            # Random exploration
-            return random.choice([0, 1])
+            # Mostly go straight, occasionally explore
+            return random.choices([0, 1, 2], weights=[0.1, 0.8, 0.1])[0]

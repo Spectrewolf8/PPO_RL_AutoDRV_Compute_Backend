@@ -97,9 +97,7 @@ class GameServer:
         self.last_tick_time = 0.0
         self.actual_tickrate = 0.0
 
-        logger.info(
-            f"GameServer initialized - Host: {host}, Port: {port}, Tickrate: {tickrate} Hz"
-        )
+        logger.info(f"GameServer initialized - Host: {host}, Port: {port}, Tickrate: {tickrate} Hz")
 
     def load_model(self, model_path: str) -> None:
         """Load a trained PPO model."""
@@ -193,11 +191,7 @@ class GameServer:
                 current_time = time.time()
 
             # Calculate actual tickrate
-            self.actual_tickrate = (
-                1.0 / (current_time - self.last_tick_time)
-                if self.last_tick_time > 0
-                else 0
-            )
+            self.actual_tickrate = 1.0 / (current_time - self.last_tick_time) if self.last_tick_time > 0 else 0
             self.last_tick_time = current_time
 
             # Process the game state and send response
@@ -229,9 +223,7 @@ class GameServer:
         }
 
         if self.connection_manager.send_json(config):
-            logger.info(
-                f"Sent configuration: Tickrate={self.tickrate} Hz, Interval={self.tick_interval*1000:.2f}ms"
-            )
+            logger.info(f"Sent configuration: Tickrate={self.tickrate} Hz, Interval={self.tick_interval*1000:.2f}ms")
         else:
             logger.error("Failed to send configuration to Unity client")
             self._handle_client_disconnect()
@@ -270,28 +262,19 @@ class GameServer:
         reward = self.env.survival_reward
         if state_data.get("rewardCollected", 0) == 1:
             reward += self.env.reward_collected_value
-            logger.info(
-                f"      Reward cube collected! Reward: +{self.env.reward_collected_value}"
-            )
+            logger.info(f"      Reward cube collected! Reward: +{self.env.reward_collected_value}")
         if state_data.get("collisionDetected", 0) == 1:
             reward += self.env.collision_penalty
-            logger.warning(
-                f"    Collision detected! Penalty: {self.env.collision_penalty}"
-            )
+            logger.warning(f"    Collision detected! Penalty: {self.env.collision_penalty}")
 
         self.episode_reward += reward
 
         # Check termination (inlined for simplicity)
-        terminated = (
-            state_data.get("collisionDetected", 0) == 1
-            or state_data.get("respawns", 0) > 0
-        )
+        terminated = state_data.get("collisionDetected", 0) == 1 or state_data.get("respawns", 0) > 0
         truncated = (self.episode_step + 1) >= self.env._max_episode_steps
 
         if truncated:
-            logger.info(
-                f"Episode will truncate at max steps ({self.env._max_episode_steps})"
-            )
+            logger.info(f"Episode will truncate at max steps ({self.env._max_episode_steps})")
 
         # Update counters AFTER checking termination
         self.episode_step += 1
@@ -318,9 +301,7 @@ class GameServer:
         logger.info(f"=== Episode {self.current_episode} Ended ===")
         logger.info(f"Total Steps: {self.episode_step}")
         logger.info(f"Total Reward: {self.episode_reward:.2f}")
-        logger.info(
-            f"Average Reward: {self.episode_reward / max(self.episode_step, 1):.3f}"
-        )
+        logger.info(f"Average Reward: {self.episode_reward / max(self.episode_step, 1):.3f}")
         logger.info(f"Average Tickrate: {self.actual_tickrate:.1f} Hz")
         logger.info("=" * 50)
 
@@ -345,9 +326,7 @@ class GameServer:
             logger.info("Session Statistics:")
             logger.info(f"  Total Episodes Completed: {self.total_episodes}")
             logger.info(f"  Total Steps Processed: {self.total_steps}")
-            logger.info(
-                f"  Average Steps per Episode: {self.total_steps / max(self.total_episodes, 1):.1f}"
-            )
+            logger.info(f"  Average Steps per Episode: {self.total_steps / max(self.total_episodes, 1):.1f}")
 
         self.connection_manager.disconnect_client()
 
@@ -368,9 +347,7 @@ class GameServer:
 
         self.tickrate = tickrate
         self.tick_interval = 1.0 / tickrate
-        logger.info(
-            f"Tickrate changed to {tickrate} Hz (interval: {self.tick_interval*1000:.2f}ms)"
-        )
+        logger.info(f"Tickrate changed to {tickrate} Hz (interval: {self.tick_interval*1000:.2f}ms)")
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get server statistics."""
@@ -402,9 +379,7 @@ class GameServer:
         logger.info("Final Statistics:")
         logger.info(f"  Total Episodes: {stats['total_episodes']}")
         logger.info(f"  Total Steps: {stats['total_steps']}")
-        logger.info(
-            f"  Average Steps per Episode: {stats['total_steps'] / max(stats['total_episodes'], 1):.1f}"
-        )
+        logger.info(f"  Average Steps per Episode: {stats['total_steps'] / max(stats['total_episodes'], 1):.1f}")
 
         logger.info("Server shutdown complete")
 
@@ -414,7 +389,7 @@ def main():
     # Server configuration
     HOST = "127.0.0.1"
     PORT = 65432
-    TICKRATE = 5  # 2 updates per second
+    TICKRATE = 2  # 2 updates per second
     MODEL_PATH = None  # Set to model path if you have a trained model
 
     # Create and start server
