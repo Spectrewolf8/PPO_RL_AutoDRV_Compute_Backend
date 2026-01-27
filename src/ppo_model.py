@@ -1,4 +1,5 @@
 # src/ppo_model.py
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -411,13 +412,14 @@ if __name__ == "__main__":
         print(f"Episode {episode + 1}, Reward: {episode_reward:.2f}, Steps: {step + 1}")
 
     # Save model
-    ppo.save("models/ppo_autodrive.pth")
+    # ppo.save("models/ppo_autodrive.pth")
+    ppo.save(f"{os.path.abspath("./models")}\\ppo_autodrive.pth")
     print("\nModel saved!")
 
     # Test loading
     print("\n=== Testing Model Loading ===")
     ppo_test = PPO(state_dim=11, action_dim=3)
-    ppo_test.load("models/ppo_autodrive.pth")
+    ppo_test.load(f"{os.path.abspath("./models")}\\ppo_autodrive.pth")
     print("Model loaded successfully!")
 
     # Test inference
