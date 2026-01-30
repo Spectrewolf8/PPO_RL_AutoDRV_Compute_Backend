@@ -2,6 +2,10 @@ from typing import Dict, Any, Tuple
 from environment import AutoDrivingEnv
 from ppo_model import PPO
 import os
+import logging
+import torch
+
+logger = logging.getLogger(__name__)
 
 
 class PPOController:
@@ -10,15 +14,24 @@ class PPOController:
     Generates actions based on observations.
     """
 
-    def __init__(self, env: AutoDrivingEnv):
+    def __init__(self, env: AutoDrivingEnv, device: str = None):
         """
         Initialize the PPO controller.
 
         Args:
             env: AutoDrivingEnv instance
+            device: Device to use ('cuda', 'cpu', or None for auto-detect)
         """
         self.env = env
         self.ppo_model = None  # Will be PPO instance when loaded
+        self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Log GPU availability
+        if self.device == "cuda":
+            logger.info(f"GPU ENABLED - Using {torch.cuda.get_device_name(0)}")
+            logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        else:
+            logger.info("Running on CPU (GPU not available or not requested)")
 
     def load_model(self, model_path: str) -> None:
         """
@@ -29,22 +42,60 @@ class PPOController:
         """
         try:
             if not os.path.exists(model_path):
-                print(f"Model file not found: {model_path}. Using rule-based policy.")
+                logger.warning(f"Model file not found: {model_path}. Using rule-based policy.")
                 return
+
+            logger.info(f"Loading PPO model from {model_path}...")
 
             # Initialize PPO model with correct dimensions
             self.ppo_model = PPO(
                 state_dim=11,  # AutoDrivingEnv observation space
                 action_dim=3,  # Discrete actions: left, straight, right
+                device=self.device,
             )
 
             # Load trained weights
             self.ppo_model.load(model_path)
-            print(f"PPO model loaded successfully from {model_path}")
+
+            # Get model info
+            actor_params = sum(p.numel() for p in self.ppo_model.actor.parameters())
+            critic_params = sum(p.numel() for p in self.ppo_model.critic.parameters())
+
+            logger.info("  PPO model loaded successfully")
+            logger.info(f"  Device: {self.ppo_model.device}")
+            logger.info(f"  Actor parameters: {actor_params:,}")
+            logger.info(f"  Critic parameters: {critic_params:,}")
+            logger.info(f"  Total parameters: {actor_params + critic_params:,}")
 
         except Exception as e:
-            print(f"Error loading model: {e}. Using rule-based policy.")
+            logger.error(f"Error loading model: {e}", exc_info=True)
+            logger.warning("Falling back to rule-based policy")
             self.ppo_model = None
+
+    def create_model(self, **kwargs) -> PPO:
+        """
+        Create a new PPO model for training.
+
+        Args:
+            **kwargs: PPO hyperparameters
+
+        Returns:
+            Initialized PPO model
+        """
+        logger.info("Creating new PPO model for training...")
+
+        self.ppo_model = PPO(state_dim=11, action_dim=3, device=self.device, **kwargs)
+
+        actor_params = sum(p.numel() for p in self.ppo_model.actor.parameters())
+        critic_params = sum(p.numel() for p in self.ppo_model.critic.parameters())
+
+        logger.info("  PPO model created")
+        logger.info(f"  Device: {self.ppo_model.device}")
+        logger.info(f"  Actor parameters: {actor_params:,}")
+        logger.info(f"  Critic parameters: {critic_params:,}")
+        logger.info(f"  Total parameters: {actor_params + critic_params:,}")
+
+        return self.ppo_model
 
     def get_action(self, game_state: Dict[str, Any]) -> Tuple[int, int]:
         """

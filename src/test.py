@@ -175,9 +175,7 @@ class TestClient:
             logger.info("SERVER CONFIGURATION RECEIVED")
             logger.info(f"  Tickrate: {self.server_tickrate} Hz")
             logger.info(f"  Tick Interval: {self.tick_interval * 1000:.2f} ms")
-            logger.info(
-                f"  Max Episode Steps: {config.get('max_episode_steps', 'N/A')}"
-            )
+            logger.info(f"  Max Episode Steps: {config.get('max_episode_steps', 'N/A')}")
             logger.info("=" * 60)
             return True
         else:
@@ -224,10 +222,7 @@ class TestClient:
         """
         # Simulate ray distances (5 rays: forward, forward-left, forward-right, left, right)
         ray_distances = self._simulate_ray_distances()
-        ray_hits = [
-            1 if d < max_d else 0
-            for d, max_d in zip(ray_distances, [7.0, 4.5, 4.5, 3.5, 3.5])
-        ]
+        ray_hits = [1 if d < max_d else 0 for d, max_d in zip(ray_distances, [7.0, 4.5, 4.5, 3.5, 3.5])]
 
         # Simulate speed changes based on steering
         if self.last_steering != 0:
@@ -507,11 +502,7 @@ class TestClient:
                 current_time = time.time()
 
             # Calculate actual send rate
-            self.actual_send_rate = (
-                1.0 / (current_time - self.last_send_time)
-                if self.last_send_time > 0
-                else 0
-            )
+            self.actual_send_rate = 1.0 / (current_time - self.last_send_time) if self.last_send_time > 0 else 0
             self.last_send_time = current_time
 
             # Generate and send game state
@@ -554,9 +545,7 @@ class TestClient:
 
             # Check if episode should end
             if episode_terminated:
-                self._end_episode(
-                    episode_reward, reason="terminated (collision/respawn)"
-                )
+                self._end_episode(episode_reward, reason="terminated (collision/respawn)")
                 return True
 
             if episode_truncated:
@@ -597,15 +586,9 @@ class TestClient:
             logger.info("-" * 80)
 
             # Calculate averages
-            avg_steps = sum(s["steps"] for s in self.episode_statistics) / len(
-                self.episode_statistics
-            )
-            avg_reward = sum(s["total_reward"] for s in self.episode_statistics) / len(
-                self.episode_statistics
-            )
-            avg_collected = sum(
-                s["rewards_collected"] for s in self.episode_statistics
-            ) / len(self.episode_statistics)
+            avg_steps = sum(s["steps"] for s in self.episode_statistics) / len(self.episode_statistics)
+            avg_reward = sum(s["total_reward"] for s in self.episode_statistics) / len(self.episode_statistics)
+            avg_collected = sum(s["rewards_collected"] for s in self.episode_statistics) / len(self.episode_statistics)
 
             logger.info("")
             logger.info("Averages:")
@@ -646,7 +629,7 @@ def main():
 
     if success:
         logger.info("")
-        logger.info("✓ Simulation completed successfully")
+        logger.info("    Simulation completed successfully")
         logger.info("")
     else:
         logger.error("")
