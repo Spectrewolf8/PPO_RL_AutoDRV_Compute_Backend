@@ -103,9 +103,7 @@ class ConnectionManager:
             # We'll store this message to be processed later
             self._pending_message = _
             self._state = ConnectionState.CONNECTED
-            self._last_client_identity = (
-                self._endpoint
-            )  # ZeroMQ doesn't expose client address in REP/REQ
+            self._last_client_identity = self._endpoint  # ZeroMQ doesn't expose client address in REP/REQ
             return True
         except zmq.Again:
             # Timeout - no message received yet

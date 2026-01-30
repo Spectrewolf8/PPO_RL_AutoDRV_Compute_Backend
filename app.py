@@ -126,10 +126,6 @@ class TrainingServer(GameServer):
         os.makedirs(os.path.dirname(self.model_save_path), exist_ok=True)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
-        # Training configuration from ppo_config
-        self.update_epochs = ppo_config.get("update_epochs", 10)
-        self.batch_size = ppo_config.get("batch_size", 64)
-
         self.app_logger.info("=" * 70)
         self.app_logger.info("TRAINING MODE INITIALIZED")
         self.app_logger.info("=" * 70)
@@ -148,8 +144,8 @@ class TrainingServer(GameServer):
         state_data = game_state.get("gameState", {})
         self.env.update_state(state_data)
 
-        # Get current observation
-        observation = self.env._current_state
+        # Get current observation (as numpy array, not dict)
+        observation = self.env._get_observation()
         action = response.get("action", 1)  # Get action from controller
         reward = response.get("reward", 0.0)
         terminated = response.get("terminated", False)
@@ -161,7 +157,7 @@ class TrainingServer(GameServer):
         # Update policy at specified frequency
         if self.training_steps - self.last_update_step >= self.update_frequency:
             self.app_logger.info(f"[TRAINING] Updating policy at step {self.training_steps}...")
-            losses = self.ppo_model.update(epochs=self.update_epochs, batch_size=self.batch_size)
+            losses = self.ppo_model.update()
 
             self.app_logger.info(
                 f"[TRAINING] Step {self.training_steps} - "
@@ -212,7 +208,7 @@ class TrainingServer(GameServer):
     @property
     def total_episodes_completed(self) -> int:
         """Get total completed episodes."""
-        return self.total_episodes
+        return self.current_episode
 
 
 def run_training_mode(config: dict, logger: logging.Logger):

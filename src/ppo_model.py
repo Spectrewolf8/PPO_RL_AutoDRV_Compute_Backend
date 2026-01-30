@@ -73,6 +73,8 @@ class PPO:
         value_coef=0.5,  # Value loss coefficient
         max_grad_norm=0.5,  # Gradient clipping
         hidden_dim=256,
+        update_epochs=10,  # Number of epochs for PPO update
+        batch_size=64,  # Batch size for PPO update
         device="cuda" if torch.cuda.is_available() else "cpu",
     ):
         self.device = device
@@ -82,6 +84,8 @@ class PPO:
         self.entropy_coef = entropy_coef
         self.value_coef = value_coef
         self.max_grad_norm = max_grad_norm
+        self.update_epochs = update_epochs
+        self.batch_size = batch_size
 
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -194,17 +198,22 @@ class PPO:
 
         return advantages, returns
 
-    def update(self, epochs=10, batch_size=64):
+    def update(self, epochs=None, batch_size=None):
         """
         Update policy using PPO
 
         Args:
-            epochs: Number of optimization epochs
-            batch_size: Mini-batch size for updates
+            epochs: Number of optimization epochs (defaults to self.update_epochs)
+            batch_size: Mini-batch size for updates (defaults to self.batch_size)
 
         Returns:
             Dictionary with loss information
         """
+        if epochs is None:
+            epochs = self.update_epochs
+        if batch_size is None:
+            batch_size = self.batch_size
+
         if len(self.states) == 0:
             return {"actor_loss": 0, "critic_loss": 0, "entropy": 0}
 
@@ -397,7 +406,7 @@ if __name__ == "__main__":
 
             # Update policy
             if total_steps % update_frequency == 0:
-                losses = ppo.update(epochs=10, batch_size=64)
+                losses = ppo.update()
                 print(
                     f"Step {total_steps} - Actor Loss: {losses['actor_loss']:.4f}, "
                     f"Critic Loss: {losses['critic_loss']:.4f}, "
