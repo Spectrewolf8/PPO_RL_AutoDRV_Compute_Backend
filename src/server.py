@@ -283,6 +283,7 @@ class GameServer:
         # Build response
         return {
             "steering": steering,
+            "action": action,  # Include action for training mode
             "reward": reward,
             "episode_reward": self.episode_reward,
             "step": self.episode_step,

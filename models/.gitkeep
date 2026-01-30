@@ -1,0 +1,2 @@
+# This directory contains trained models
+# Models are saved during training and loaded during inference

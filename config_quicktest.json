@@ -1,0 +1,41 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 65432,
+    "tickrate": 2
+  },
+  "environment": {
+    "max_ray_distances": [7.0, 4.5, 4.5, 3.5, 3.5],
+    "max_speed": 2.5,
+    "steering_speed_penalty": 0.5,
+    "reward_collected_value": 15.0,
+    "collision_penalty": -10.0,
+    "survival_reward": 0.1,
+    "max_episode_steps": 500
+  },
+  "training": {
+    "total_episodes": 100,
+    "update_frequency": 100,
+    "save_frequency": 10,
+    "model_save_path": "models/ppo_quicktest.pth",
+    "checkpoint_dir": "models/checkpoints_quicktest",
+    "log_dir": "logs"
+  },
+  "ppo_hyperparameters": {
+    "lr_actor": 0.001,
+    "lr_critic": 0.002,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "epsilon": 0.2,
+    "entropy_coef": 0.02,
+    "value_coef": 0.5,
+    "max_grad_norm": 0.5,
+    "hidden_dim": 128,
+    "update_epochs": 5,
+    "batch_size": 32
+  },
+  "inference": {
+    "model_path": "models/ppo_quicktest.pth",
+    "deterministic": true
+  }
+}
