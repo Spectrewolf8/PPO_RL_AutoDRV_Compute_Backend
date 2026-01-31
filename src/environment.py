@@ -21,6 +21,7 @@ class AutoDrivingEnv(gym.Env):
         - Python calculates rewards based on Unity signals
         - Unity sends: rewardCollected (0/1), collisionDetected (0/1)
         - Server-side reward calculation provides flexibility for tuning
+        - Additional reward given for driving straight to encourage stable driving
     """
 
     metadata = {"render_modes": ["human"], "render_fps": 30}
@@ -34,6 +35,7 @@ class AutoDrivingEnv(gym.Env):
         reward_collected_value: float = 10.0,
         collision_penalty: float = -10.0,
         survival_reward: float = 0.1,
+        straight_driving_reward: float = 0.05,
     ):
         """
         Initialize the AutoDriving environment.
@@ -47,6 +49,7 @@ class AutoDrivingEnv(gym.Env):
             reward_collected_value: Reward value when collecting a reward object
             collision_penalty: Penalty value when collision is detected
             survival_reward: Small reward per step for staying alive (encourages survival without biasing steering)
+            straight_driving_reward: Reward for driving straight (encourages stable, straight-line driving)
         """
         super().__init__()
 
@@ -58,6 +61,7 @@ class AutoDrivingEnv(gym.Env):
         self.reward_collected_value = reward_collected_value
         self.collision_penalty = collision_penalty
         self.survival_reward = survival_reward
+        self.straight_driving_reward = straight_driving_reward
 
         # Set individual ray max distances
         if max_ray_distances is None:
@@ -86,6 +90,7 @@ class AutoDrivingEnv(gym.Env):
         self._current_state = None
         self._episode_step = 0
         self._max_episode_steps = 1000  # Can be configured
+        self._last_action = None  # Track last action for reward calculation
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
@@ -111,6 +116,7 @@ class AutoDrivingEnv(gym.Env):
         }
 
         self._episode_step = 0
+        self._last_action = None  # Reset last action
 
         observation = self._get_observation()
         info = self._get_info()
@@ -133,6 +139,9 @@ class AutoDrivingEnv(gym.Env):
         """
         # Convert discrete action to steering value
         steering = self.action_to_steering(action)
+
+        # Store action for reward calculation
+        self._last_action = action
 
         self._episode_step += 1
 
@@ -207,6 +216,7 @@ class AutoDrivingEnv(gym.Env):
 
         Reward structure:
             - Survival: Small positive reward per step (encourages staying alive)
+            - Straight driving: Small positive reward for driving straight (encourages stable driving)
             - Reward collection: Large positive reward
             - Collision: Large negative penalty
 
@@ -219,11 +229,16 @@ class AutoDrivingEnv(gym.Env):
         # This encourages the model to avoid collisions without biasing toward/against steering
         reward += self.survival_reward
 
-        # 2. Reward for collecting reward objects (sent from Unity)
+        # 2. Straight driving reward - given when driving straight (action 1)
+        # This encourages stable, straight-line driving when appropriate
+        if self._last_action == 1:
+            reward += self.straight_driving_reward
+
+        # 3. Reward for collecting reward objects (sent from Unity)
         if self._current_state.get("rewardCollected", 0) == 1:
             reward += self.reward_collected_value
 
-        # 3. Penalty for collisions (sent from Unity)
+        # 4. Penalty for collisions (sent from Unity)
         if self._current_state.get("collisionDetected", 0) == 1:
             reward += self.collision_penalty
 
@@ -360,6 +375,7 @@ if __name__ == "__main__":
         reward_collected_value=10.0,
         collision_penalty=-10.0,
         survival_reward=0.1,
+        straight_driving_reward=0.05,
     )
 
     # Test reset
@@ -394,10 +410,11 @@ if __name__ == "__main__":
         observation, reward, terminated, truncated, info = env.step(action)
 
         action_names = ["LEFT", "STRAIGHT", "RIGHT"]
-        print(
-            f"\nAction: {action} ({action_names[action]}) - Steering: {env.action_to_steering(action)}"
-        )
-        print(f"  Reward: {reward:.2f} (survival reward)")
+        print(f"\nAction: {action} ({action_names[action]}) - Steering: {env.action_to_steering(action)}")
+        reward_desc = "survival reward"
+        if action == 1:
+            reward_desc += " + straight driving reward"
+        print(f"  Reward: {reward:.2f} ({reward_desc})")
         print(f"  Terminated: {terminated}, Truncated: {truncated}")
 
         if terminated or truncated:
@@ -426,9 +443,7 @@ if __name__ == "__main__":
     simulated_state["collisionDetected"] = 1
     env.update_state(simulated_state)
     observation, reward, terminated, truncated, info = env.step(1)
-    print(
-        f"Collision detected! Total reward: {reward:.2f} (survival + collision penalty), Terminated: {terminated}"
-    )
+    print(f"Collision detected! Total reward: {reward:.2f} (survival + collision penalty), Terminated: {terminated}")
     env.render()
 
     env.close()

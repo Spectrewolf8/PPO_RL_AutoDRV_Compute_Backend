@@ -36,11 +36,12 @@ Reinforcement Learning backend for autonomous driving using Proximal Policy Opti
 ## Features
 
 - ✅ **Training Mode**: Train PPO agent from scratch
+- ✅ **Resume Training**: Continue training from saved checkpoints
 - ✅ **Inference Mode**: Run trained models for testing/deployment
 - ✅ **Configurable**: JSON-based configuration for all parameters
-- ✅ **Checkpoint System**: Automatic model saving during training
+- ✅ **Checkpoint System**: Automatic model saving during training with full state preservation
 - ✅ **Real-time Communication**: ZeroMQ bridge to Unity
-- ✅ **Flexible Rewards**: Configurable reward structure
+- ✅ **Flexible Rewards**: Configurable reward structure with straight driving bonus
 - ✅ **GPU Support**: Automatic CUDA detection
 
 ## Installation
@@ -68,7 +69,7 @@ python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', to
 
 ### Training a New Model
 
-1. **Configure training** (edit `config.json` if needed - defaults are provided)
+1. **Configure training** (edit config.json if needed - defaults are provided)
 
 2. **Set mode in app.py**:
 
@@ -88,12 +89,36 @@ python app.py
 5. **Monitor training**:
    - Logs: `logs/train_<timestamp>.log`
    - Checkpoints: `models/checkpoints/`
-   - Best model: `models/ppo_best.pth`
+   - Best model: ppo_best.pth
    - Final model: `models/ppo_autodrive.pth`
+
+### Resuming Training from Checkpoint
+
+1. **Find your checkpoint** (e.g., `models/checkpoints/ppo_episode_50.pth`)
+
+2. **Update config.json**:
+
+```json
+"training": {
+  "resume_from_checkpoint": "models/checkpoints/ppo_episode_50.pth"
+}
+```
+
+3. **Start training server**:
+
+```bash
+python app.py
+```
+
+4. **Training will resume** from the saved episode with all progress preserved:
+   - Episode count
+   - Training steps
+   - Best reward achieved
+   - Model weights and optimizer states
 
 ### Running Inference
 
-1. **Ensure your trained model exists** (e.g., `models/ppo_best.pth` or `models/ppo_autodrive.pth`)
+1. **Ensure your trained model exists** (e.g., ppo_best.pth or `models/ppo_autodrive.pth`)
 
 2. **Set mode in app.py**:
 
@@ -114,9 +139,9 @@ python app.py
 
 ### config.json Structure
 
-**Note:** The actual `config.json` file should NOT contain comments (JSON doesn't support them). The comments below are for documentation purposes only.
+**Note:** The actual config.json file should NOT contain comments (JSON doesn't support them). The comments below are for documentation purposes only.
 
-**Mode Selection:** Training vs Inference mode is set in `app.py` via the `MODE` variable, NOT in the config file.
+**Mode Selection:** Training vs Inference mode is set in app.py via the `MODE` variable, NOT in the config file.
 
 ```javascript
 {
@@ -134,6 +159,7 @@ python app.py
     "reward_collected_value": 15.0,                   // Reward for collecting items
     "collision_penalty": -10.0,                       // Penalty for collisions
     "survival_reward": 0.1,                           // Small reward per step alive
+    "straight_driving_reward": 0.05,                  // Reward for driving straight (encourages stability)
     "max_episode_steps": 1000                         // Max steps per episode before truncation
   },
 
@@ -143,7 +169,8 @@ python app.py
     "save_frequency": 50,                             // Save checkpoint every N episodes
     "model_save_path": "models/ppo_autodrive.pth",   // Final model save path
     "checkpoint_dir": "models/checkpoints",           // Directory for training checkpoints
-    "log_dir": "logs"                                 // Directory for log files
+    "log_dir": "logs",                                // Directory for log files
+    "resume_from_checkpoint": null                    // Path to checkpoint to resume from (or null for new training)
   },
 
   "ppo_hyperparameters": {
@@ -171,9 +198,9 @@ python app.py
 
 ### Switching Modes
 
-**Important:** The operation mode (training vs inference) is controlled in `app.py`, NOT in the config file.
+**Important:** The operation mode (training vs inference) is controlled in app.py, NOT in the config file.
 
-Edit the flags at the top of `app.py`:
+Edit the flags at the top of app.py:
 
 ```python
 # CONFIGURATION FLAGS - Edit these to change behavior
@@ -229,8 +256,11 @@ CONFIG_FILE = "config_quicktest.json"
 ### Reward Structure
 
 - `+survival_reward`: Per step alive (default: +0.1)
+- `+straight_driving_reward`: For driving straight (default: +0.05)
 - `+reward_collected_value`: For collecting items (default: +15.0)
 - `+collision_penalty`: For collisions (default: -10.0)
+
+**Note:** The straight driving reward encourages the agent to prefer stable, straight-line driving when it's safe to do so, promoting more efficient navigation.
 
 ## Model Architecture
 
@@ -259,12 +289,57 @@ Input (11) → FC(256) → ReLU → FC(256) → ReLU → FC(1)
 
 ## Training Tips
 
+### Resume Training
+
+**When to Resume:**
+
+- Training was interrupted (Ctrl+C, power loss, etc.)
+- Want to extend training beyond original episode count
+- Need to fine-tune an existing model with different hyperparameters
+
+**How to Resume:**
+
+1. **Locate your checkpoint:**
+   - Periodic: `models/checkpoints/ppo_episode_<N>.pth`
+   - Best: ppo_best.pth
+   - Interrupted: `models/checkpoints/ppo_interrupted_ep<N>.pth`
+
+2. **Update config.json:**
+
+   ```json
+   "training": {
+     "total_episodes": 1500,  // Extend beyond original 1000
+     "resume_from_checkpoint": "models/checkpoints/ppo_episode_1000.pth"
+   }
+   ```
+
+3. **Run training:**
+   ```bash
+   python app.py
+   ```
+
+**What Gets Preserved:**
+
+- ✅ Model weights (Actor & Critic networks)
+- ✅ Optimizer states (Adam momentum, etc.)
+- ✅ Current episode number
+- ✅ Total training steps
+- ✅ Best episode reward achieved
+- ✅ All hyperparameters
+
+**Tips:**
+
+- To start fresh, set `resume_from_checkpoint: null`
+- Checkpoints include full training state for seamless continuation
+- Best model is automatically tracked and saved
+
 ### For Better Performance
 
 1. **Adjust learning rates**: Lower for stable learning, higher for faster convergence
-2. **Tune reward structure**: Balance survival, collection, and collision penalties
+2. **Tune reward structure**: Balance survival, collection, collision, and straight driving rewards
 3. **Modify update frequency**: More frequent updates = more stable but slower
 4. **Entropy coefficient**: Higher = more exploration, lower = more exploitation
+5. **Straight driving reward**: Adjust to control preference for stable vs. aggressive driving
 
 ### Monitoring Training
 
@@ -313,7 +388,7 @@ PPO_RL_AutoDRV_Compute_Backend/
 
 #### Configuration Flags
 
-Edit these at the top of `app.py`:
+Edit these at the top of app.py:
 
 ```python
 MODE = "train"              # "train" or "inference"
@@ -378,13 +453,14 @@ for episode in range(1000):
 
 ### Custom Reward Function
 
-Edit `environment.py` or configure in `config.json`:
+Edit environment.py or configure in config.json:
 
 ```python
 env = AutoDrivingEnv(
-    reward_collected_value=20.0,   # Increase collection reward
-    collision_penalty=-15.0,       # Increase collision penalty
-    survival_reward=0.2            # Increase survival reward
+    reward_collected_value=20.0,      # Increase collection reward
+    collision_penalty=-15.0,          # Increase collision penalty
+    survival_reward=0.2,              # Increase survival reward
+    straight_driving_reward=0.1       # Increase straight driving bonus
 )
 ```
 

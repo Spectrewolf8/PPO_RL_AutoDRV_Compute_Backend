@@ -11,6 +11,7 @@
     "reward_collected_value": 15.0,
     "collision_penalty": -10.0,
     "survival_reward": 0.1,
+    "straight_driving_reward": 0.05,
     "max_episode_steps": 1000
   },
   "training": {
@@ -19,7 +20,8 @@
     "save_frequency": 50,
     "model_save_path": "models/ppo_autodrive.pth",
     "checkpoint_dir": "models/checkpoints",
-    "log_dir": "logs"
+    "log_dir": "logs",
+    "resume_from_checkpoint": null
   },
   "ppo_hyperparameters": {
     "lr_actor": 0.0003,

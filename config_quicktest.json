@@ -10,7 +10,8 @@
     "steering_speed_penalty": 0.5,
     "reward_collected_value": 15.0,
     "collision_penalty": -10.0,
-    "survival_reward": 0.1,
+    "survival_reward": 1,
+    "straight_driving_reward": 2.5,
     "max_episode_steps": 500
   },
   "training": {
@@ -19,7 +20,8 @@
     "save_frequency": 10,
     "model_save_path": "models/ppo_quicktest.pth",
     "checkpoint_dir": "models/checkpoints_quicktest",
-    "log_dir": "logs"
+    "log_dir": "logs",
+    "resume_from_checkpoint": null
   },
   "ppo_hyperparameters": {
     "lr_actor": 0.001,

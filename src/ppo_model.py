@@ -298,31 +298,46 @@ class PPO:
             "entropy": total_entropy / num_updates if num_updates > 0 else 0,
         }
 
-    def save(self, filepath):
-        """Save model"""
-        torch.save(
-            {
-                "actor_state_dict": self.actor.state_dict(),
-                "critic_state_dict": self.critic.state_dict(),
-                "actor_optimizer_state_dict": self.actor_optimizer.state_dict(),
-                "critic_optimizer_state_dict": self.critic_optimizer.state_dict(),
-                "hyperparameters": {
-                    "state_dim": self.state_dim,
-                    "action_dim": self.action_dim,
-                    "gamma": self.gamma,
-                    "gae_lambda": self.gae_lambda,
-                    "epsilon": self.epsilon,
-                    "entropy_coef": self.entropy_coef,
-                    "value_coef": self.value_coef,
-                    "max_grad_norm": self.max_grad_norm,
-                },
+    def save(self, filepath, training_state=None):
+        """Save model and optionally training state
+
+        Args:
+            filepath: Path to save the model
+            training_state: Optional dict with training state (episode, steps, best_reward, etc.)
+        """
+        checkpoint = {
+            "actor_state_dict": self.actor.state_dict(),
+            "critic_state_dict": self.critic.state_dict(),
+            "actor_optimizer_state_dict": self.actor_optimizer.state_dict(),
+            "critic_optimizer_state_dict": self.critic_optimizer.state_dict(),
+            "hyperparameters": {
+                "state_dim": self.state_dim,
+                "action_dim": self.action_dim,
+                "gamma": self.gamma,
+                "gae_lambda": self.gae_lambda,
+                "epsilon": self.epsilon,
+                "entropy_coef": self.entropy_coef,
+                "value_coef": self.value_coef,
+                "max_grad_norm": self.max_grad_norm,
             },
-            filepath,
-        )
+        }
+
+        # Add training state if provided
+        if training_state is not None:
+            checkpoint["training_state"] = training_state
+
+        torch.save(checkpoint, filepath)
         print(f"Model saved to {filepath}")
 
     def load(self, filepath):
-        """Load model"""
+        """Load model and return training state if available
+
+        Args:
+            filepath: Path to load the model from
+
+        Returns:
+            training_state: Dict with training state if available, None otherwise
+        """
         checkpoint = torch.load(filepath, map_location=self.device)
         self.actor.load_state_dict(checkpoint["actor_state_dict"])
         self.critic.load_state_dict(checkpoint["critic_state_dict"])
@@ -340,6 +355,9 @@ class PPO:
             self.max_grad_norm = hyperparams.get("max_grad_norm", self.max_grad_norm)
 
         print(f"Model loaded from {filepath}")
+
+        # Return training state if available
+        return checkpoint.get("training_state", None)
 
 
 # =============================================================================

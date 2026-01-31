@@ -22,6 +22,7 @@ import os
 import json
 import logging
 from datetime import datetime
+import torch.utils.tensorboard as tb
 
 
 # Add src to path
@@ -76,6 +77,7 @@ def create_environment(env_config: dict) -> AutoDrivingEnv:
         reward_collected_value=env_config.get("reward_collected_value", 15.0),
         collision_penalty=env_config.get("collision_penalty", -10.0),
         survival_reward=env_config.get("survival_reward", 0.1),
+        straight_driving_reward=env_config.get("straight_driving_reward", 0.05),
     )
     env._max_episode_steps = env_config.get("max_episode_steps", 1000)
     return env
@@ -107,15 +109,13 @@ class TrainingServer(GameServer):
         self.env = create_environment(env_config)
         self.controller = PPOController(self.env)
 
-        # Create PPO model for training
-        self.ppo_model = self.controller.create_model(**ppo_config)
-
         # Training configuration
         self.total_episodes = train_config.get("total_episodes", 1000)
         self.update_frequency = train_config.get("update_frequency", 200)
         self.save_frequency = train_config.get("save_frequency", 50)
         self.model_save_path = train_config.get("model_save_path", "models/ppo_autodrive.pth")
         self.checkpoint_dir = train_config.get("checkpoint_dir", "models/checkpoints")
+        resume_checkpoint = train_config.get("resume_from_checkpoint", None)
 
         # Training state
         self.training_steps = 0
@@ -125,6 +125,40 @@ class TrainingServer(GameServer):
         # Create directories
         os.makedirs(os.path.dirname(self.model_save_path), exist_ok=True)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
+
+        # Add TensorBoard writer
+        # Setup TensorBoard logging with readable timestamp
+        tensorboard_log_dir = f"runs/training_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        self.writer = tb.SummaryWriter(log_dir=tensorboard_log_dir)
+        self.app_logger.info("TensorBoard logs: runs/")
+
+        # Create or load PPO model
+        if resume_checkpoint and os.path.exists(resume_checkpoint):
+            self.app_logger.info(f"Resuming training from checkpoint: {resume_checkpoint}")
+            self.ppo_model = self.controller.create_model(**ppo_config)
+            training_state = self.ppo_model.load(resume_checkpoint)
+
+            if training_state:
+                # Resume from saved training state
+                self.current_episode = training_state.get("current_episode", 0)
+                self.training_steps = training_state.get("training_steps", 0)
+                self.last_update_step = training_state.get("last_update_step", 0)
+                self.best_episode_reward = training_state.get("best_episode_reward", float("-inf"))
+
+                self.app_logger.info("=" * 70)
+                self.app_logger.info("RESUMING TRAINING FROM CHECKPOINT")
+                self.app_logger.info("=" * 70)
+                self.app_logger.info(f"Resuming from Episode: {self.current_episode}")
+                self.app_logger.info(f"Training Steps: {self.training_steps}")
+                self.app_logger.info(f"Best Episode Reward: {self.best_episode_reward:.2f}")
+                self.app_logger.info(f"Episodes Remaining: {self.total_episodes - self.current_episode}")
+                self.app_logger.info("=" * 70)
+            else:
+                self.app_logger.warning("Checkpoint loaded but no training state found. Starting fresh.")
+        else:
+            if resume_checkpoint:
+                self.app_logger.warning(f"Checkpoint not found: {resume_checkpoint}. Starting new training.")
+            self.ppo_model = self.controller.create_model(**ppo_config)
 
         self.app_logger.info("=" * 70)
         self.app_logger.info("TRAINING MODE INITIALIZED")
@@ -156,8 +190,12 @@ class TrainingServer(GameServer):
 
         # Update policy at specified frequency
         if self.training_steps - self.last_update_step >= self.update_frequency:
-            self.app_logger.info(f"[TRAINING] Updating policy at step {self.training_steps}...")
             losses = self.ppo_model.update()
+
+            # Log to TensorBoard
+            self.writer.add_scalar("Loss/Actor", losses["actor_loss"], self.training_steps)
+            self.writer.add_scalar("Loss/Critic", losses["critic_loss"], self.training_steps)
+            self.writer.add_scalar("Loss/Entropy", losses["entropy"], self.training_steps)
 
             self.app_logger.info(
                 f"[TRAINING] Step {self.training_steps} - "
@@ -177,14 +215,26 @@ class TrainingServer(GameServer):
         # Save model periodically
         if self.current_episode % self.save_frequency == 0 and self.current_episode > 0:
             checkpoint_path = os.path.join(self.checkpoint_dir, f"ppo_episode_{self.current_episode}.pth")
-            self.ppo_model.save(checkpoint_path)
+            training_state = {
+                "current_episode": self.current_episode,
+                "training_steps": self.training_steps,
+                "last_update_step": self.last_update_step,
+                "best_episode_reward": self.best_episode_reward,
+            }
+            self.ppo_model.save(checkpoint_path, training_state=training_state)
             self.app_logger.info(f"[TRAINING] Checkpoint saved: {checkpoint_path}")
 
         # Save best model
         if self.episode_reward > self.best_episode_reward:
             self.best_episode_reward = self.episode_reward
             best_model_path = os.path.join(os.path.dirname(self.model_save_path), "ppo_best.pth")
-            self.ppo_model.save(best_model_path)
+            training_state = {
+                "current_episode": self.current_episode,
+                "training_steps": self.training_steps,
+                "last_update_step": self.last_update_step,
+                "best_episode_reward": self.best_episode_reward,
+            }
+            self.ppo_model.save(best_model_path, training_state=training_state)
             self.app_logger.info(
                 f"[TRAINING] New best model! Reward: {self.best_episode_reward:.2f} " f"saved to {best_model_path}"
             )
@@ -199,7 +249,13 @@ class TrainingServer(GameServer):
             self.app_logger.info("=" * 70)
 
             # Save final model
-            self.ppo_model.save(self.model_save_path)
+            training_state = {
+                "current_episode": self.current_episode,
+                "training_steps": self.training_steps,
+                "last_update_step": self.last_update_step,
+                "best_episode_reward": self.best_episode_reward,
+            }
+            self.ppo_model.save(self.model_save_path, training_state=training_state)
             self.app_logger.info(f"Final model saved to: {self.model_save_path}")
 
             # Shutdown server
@@ -227,12 +283,35 @@ def run_training_mode(config: dict, logger: logging.Logger):
         current_model_path = os.path.join(
             config["training"]["checkpoint_dir"], f"ppo_interrupted_ep{server.current_episode}.pth"
         )
-        server.ppo_model.save(current_model_path)
+        training_state = {
+            "current_episode": server.current_episode,
+            "training_steps": server.training_steps,
+            "last_update_step": server.last_update_step,
+            "best_episode_reward": server.best_episode_reward,
+        }
+        server.ppo_model.save(current_model_path, training_state=training_state)
         logger.info(f"Model saved before exit: {current_model_path}")
 
         server.shutdown()
     except Exception as e:
         logger.error(f"Training error: {e}", exc_info=True)
+
+        # Save model before shutdown
+        try:
+            emergency_path = os.path.join(
+                config["training"]["checkpoint_dir"], f"ppo_emergency_ep{server.current_episode}.pth"
+            )
+            training_state = {
+                "current_episode": server.current_episode,
+                "training_steps": server.training_steps,
+                "last_update_step": server.last_update_step,
+                "best_episode_reward": server.best_episode_reward,
+            }
+            server.ppo_model.save(emergency_path, training_state=training_state)
+            logger.info(f"Emergency save completed: {emergency_path}")
+        except Exception as save_error:
+            logger.error(f"Failed to save model during emergency shutdown: {save_error}")
+
         server.shutdown()
 
 
