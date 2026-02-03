@@ -273,9 +273,9 @@ class PPO:
                 nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
                 self.actor_optimizer.step()
 
-                # Critic loss
+                # Critic loss (with value coefficient)
                 values = self.critic(batch_states).squeeze()
-                critic_loss = nn.MSELoss()(values, batch_returns)
+                critic_loss = self.value_coef * nn.MSELoss()(values, batch_returns)
 
                 # Update critic
                 self.critic_optimizer.zero_grad()
@@ -319,6 +319,9 @@ class PPO:
                 "entropy_coef": self.entropy_coef,
                 "value_coef": self.value_coef,
                 "max_grad_norm": self.max_grad_norm,
+                "hidden_dim": self.actor.network[0].out_features,
+                "update_epochs": self.update_epochs,
+                "batch_size": self.batch_size,
             },
         }
 
@@ -353,6 +356,8 @@ class PPO:
             self.entropy_coef = hyperparams.get("entropy_coef", self.entropy_coef)
             self.value_coef = hyperparams.get("value_coef", self.value_coef)
             self.max_grad_norm = hyperparams.get("max_grad_norm", self.max_grad_norm)
+            self.update_epochs = hyperparams.get("update_epochs", self.update_epochs)
+            self.batch_size = hyperparams.get("batch_size", self.batch_size)
 
         print(f"Model loaded from {filepath}")
 

@@ -269,16 +269,16 @@ class GameServer:
 
         self.episode_reward += reward
 
-        # Check termination (inlined for simplicity)
-        terminated = state_data.get("collisionDetected", 0) == 1 or state_data.get("respawns", 0) > 0
-        truncated = (self.episode_step + 1) >= self.env._max_episode_steps
-
-        if truncated:
-            logger.info(f"Episode will truncate at max steps ({self.env._max_episode_steps})")
-
-        # Update counters AFTER checking termination
+        # Update counters BEFORE checking termination
         self.episode_step += 1
         self.total_steps += 1
+
+        # Check termination (inlined for simplicity)
+        terminated = state_data.get("collisionDetected", 0) == 1 or state_data.get("respawns", 0) > 0
+        truncated = self.episode_step >= self.env._max_episode_steps
+
+        if truncated:
+            logger.info(f"Episode truncated at max steps ({self.env._max_episode_steps})")
 
         # Build response
         return {

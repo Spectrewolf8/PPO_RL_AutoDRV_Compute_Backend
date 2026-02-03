@@ -25,6 +25,7 @@ class PPOController:
         self.env = env
         self.ppo_model = None  # Will be PPO instance when loaded
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+        self.deterministic = True  # Default for inference, can be overridden
 
         # Log GPU availability
         if self.device == "cuda":
@@ -53,6 +54,9 @@ class PPOController:
                 action_dim=3,  # Discrete actions: left, straight, right
                 device=self.device,
             )
+
+            # Store for inference mode
+            self.deterministic = True  # Default for inference
 
             # Load trained weights
             self.ppo_model.load(model_path)
@@ -115,8 +119,8 @@ class PPOController:
 
         # Get action from model or rule-based policy
         if self.ppo_model is not None:
-            # Use trained model (deterministic for inference)
-            action, _ = self.ppo_model.predict(observation, deterministic=True)
+            # Use trained model (use configured deterministic flag)
+            action, _ = self.ppo_model.predict(observation, deterministic=self.deterministic)
         else:
             # Use rule-based policy
             action = self._rule_based_policy(observation)

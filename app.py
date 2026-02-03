@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from environment import AutoDrivingEnv
 from ppo_controller import PPOController
-from server import GameServer
+from server import GameServer, ServerState
 
 
 # Configure logging
@@ -208,9 +208,16 @@ class TrainingServer(GameServer):
         return response
 
     def _handle_episode_end(self) -> None:
-        """Override to add model saving logic."""
-        # Call parent to log statistics
-        super()._handle_episode_end()
+        """Override to add model saving logic and check training completion."""
+        # Increment total_episodes counter
+        self.total_episodes += 1
+
+        # Log episode summary
+        self.app_logger.info(f"=== Episode {self.current_episode} Ended ===")
+        self.app_logger.info(f"Total Steps: {self.episode_step}")
+        self.app_logger.info(f"Total Reward: {self.episode_reward:.2f}")
+        self.app_logger.info(f"Average Reward: {self.episode_reward / max(self.episode_step, 1):.3f}")
+        self.app_logger.info("=" * 50)
 
         # Save model periodically
         if self.current_episode % self.save_frequency == 0 and self.current_episode > 0:
@@ -239,11 +246,11 @@ class TrainingServer(GameServer):
                 f"[TRAINING] New best model! Reward: {self.best_episode_reward:.2f} " f"saved to {best_model_path}"
             )
 
-        # Check if training is complete
-        if self.total_episodes_completed >= self.total_episodes:
+        # Check if training is complete BEFORE starting new episode
+        if self.current_episode >= self.total_episodes:
             self.app_logger.info("=" * 70)
             self.app_logger.info("TRAINING COMPLETE!")
-            self.app_logger.info(f"Total Episodes: {self.total_episodes_completed}")
+            self.app_logger.info(f"Total Episodes: {self.current_episode}")
             self.app_logger.info(f"Total Steps: {self.training_steps}")
             self.app_logger.info(f"Best Episode Reward: {self.best_episode_reward:.2f}")
             self.app_logger.info("=" * 70)
@@ -260,6 +267,16 @@ class TrainingServer(GameServer):
 
             # Shutdown server
             self.shutdown()
+            return
+
+        # Training not complete - check if client is still connected and start new episode
+        if self.connection_manager.check_connection():
+            self.app_logger.info("Client still connected. Starting new episode...")
+            self._start_new_episode()
+            self.state = ServerState.EPISODE_RUNNING
+        else:
+            self.app_logger.info("Client disconnected between episodes")
+            self._handle_client_disconnect()
 
     @property
     def total_episodes_completed(self) -> int:
@@ -345,6 +362,7 @@ def run_inference_mode(config: dict, logger: logging.Logger):
     # Override environment with configured values
     server.env = create_environment(env_config)
     server.controller = PPOController(server.env)
+    server.controller.deterministic = inference_config.get("deterministic", True)
     server.controller.load_model(model_path)
 
     logger.info("=" * 70)
