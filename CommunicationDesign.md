@@ -139,7 +139,7 @@ If Unity needs to reconnect:
 
 ---
 
-## **📤 UNITY → PYTHON (Game State Request)**
+## **UNITY → PYTHON (Game State Request)**
 
 ### **Message Structure**
 
@@ -175,7 +175,7 @@ If Unity needs to reconnect:
 
 ---
 
-## **📥 PYTHON → UNITY (Action & Feedback Reply)**
+## **PYTHON → UNITY (Action & Feedback Reply)**
 
 ### **Message Structure**
 
@@ -217,7 +217,7 @@ If Unity needs to reconnect:
 
 ---
 
-## **🔄 COMMUNICATION FLOW**
+## **COMMUNICATION FLOW**
 
 ### **Complete Flow Diagram**
 
@@ -258,7 +258,7 @@ Unity                           Python Server
 
 ---
 
-## **⚠️ CRITICAL IMPLEMENTATION NOTES**
+## **CRITICAL IMPLEMENTATION NOTES**
 
 ### **1. Signal Flags (MUST RESET!)**
 
@@ -323,7 +323,7 @@ messageId++;  // 1, 2, 3, 4...
 
 ---
 
-## **📊 EPISODE TERMINATION**
+## **EPISODE TERMINATION**
 
 Episodes end when:
 
@@ -335,7 +335,7 @@ Server automatically starts new episode if Unity stays connected.
 
 ---
 
-## **🛠️ UNITY DEPENDENCIES**
+## **UNITY DEPENDENCIES**
 
 ### **Install NetMQ**
 
@@ -358,7 +358,7 @@ using UnityEngine;
 
 ---
 
-## **📋 QUICK REFERENCE**
+## **QUICK REFERENCE**
 
 ### **Server Configuration (Default)**
 
