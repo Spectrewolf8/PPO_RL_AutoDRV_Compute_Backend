@@ -4,6 +4,26 @@ Reinforcement Learning backend for autonomous driving using Proximal Policy Opti
 
 **Unity Game World**: [PPO_AutoDRW_Unity3d_GameWorld](https://github.com/Spectrewolf8/PPO_AutoDRW_Unity3d_GameWorld)
 
+## Tech Stack
+
+- **Language**: Python
+- **RL Framework**: Custom PPO implementation in `src/ppo_model.py` + `src/ppo_controller.py`
+- **Deep Learning**: PyTorch (required by `app.py` for training, model loading, and TensorBoard logging)
+- **RL Environment**: Gymnasium-compatible environment (`src/environment.py`)
+- **Communication**: ZeroMQ via `pyzmq` (REQ/REP protocol with Unity client)
+- **Telemetry**: TensorBoard logs (`runs/`), file-based training logs (`logs/`)
+- **Core Dependencies** (from `requirements.txt`):
+  - `gymnasium`, `torchrl`, `numpy`, `pyzmq`, `tensordict`, `tqdm`
+
+## System Requirements
+
+- **Python 3.x** with `pip` and virtualenv/conda recommended
+- **Unity client** running the game world repo (see link above)
+- **GPU (optional)**: If you have CUDA-enabled PyTorch installed, training can use the GPU
+- **Network**: Local ZeroMQ connection on `127.0.0.1:65432`
+
+> Note: Install PyTorch separately if it is not resolved by your environment, then run `pip install -r requirements.txt`.
+
 ## Installation
 
 ```bash
@@ -69,6 +89,36 @@ Edit `config.json`:
    ```
 
 3. Run: `python app.py` + launch Unity client
+
+## Architecture Overview
+
+```
+Unity Client (NetMQ) <--REQ/REP--> ZeroMQ Server (src/server.py)
+                                     |
+                                     v
+                          Gymnasium Environment (src/environment.py)
+                                     |
+                                     v
+                           PPO Controller + Model
+                     (src/ppo_controller.py / src/ppo_model.py)
+```
+
+- **`app.py`** is the main entrypoint that selects **train** or **inference** mode.
+- **`src/server.py`** handles ZeroMQ networking and step-by-step communication.
+- **`src/environment.py`** provides a Gymnasium-style environment and observation processing.
+- **`src/ppo_model.py`** defines the PPO actor/critic networks and update logic.
+- **`src/ppo_controller.py`** wraps PPO action selection and policy loading.
+- **`src/connection_manager.py`** manages client connection lifecycle and timeouts.
+
+## Training Pipeline Details
+
+- **Step processing**: Each Unity `game_state` message updates the environment state.
+- **Transition storage**: `(obs, action, reward, done)` is stored per step.
+- **Policy updates**: PPO update runs every `update_frequency` steps.
+- **Checkpoints**: Saved every `save_frequency` episodes.
+- **Best model**: `ppo_best.pth` saved when episode reward improves.
+- **Final model**: `models/ppo_autodrive.pth` written at training completion.
+- **TensorBoard**: Logs actor/critic/entropy losses into `runs/`.
 
 ## Configuration
 
