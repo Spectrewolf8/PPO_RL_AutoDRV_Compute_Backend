@@ -387,19 +387,3 @@ using UnityEngine;
 - Cube Collection: `+15.0`
 - Collision: `-10.0`
 
-```
-
-This concise documentation focuses on what Unity developers need to know:
-1. Initial handshake and configuration synchronization
-2. Complete, working Unity code example
-3. Critical implementation details
-4. Communication flow diagram
-5. Common pitfalls and solutions
-6. Quick reference for key valuesThis concise documentation focuses on what Unity developers need to know:
-1. Initial handshake and configuration synchronization
-2. Complete, working Unity code example
-3. Critical implementation details
-4. Communication flow diagram
-5. Common pitfalls and solutions
-6. Quick reference for key values
-```
